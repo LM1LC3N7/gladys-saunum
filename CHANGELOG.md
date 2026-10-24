@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-24
+
 ### Added
 
 - Saunum Leil sauna control panel over local Modbus TCP: session, state,
@@ -28,3 +30,6 @@ the notes of the version's GitHub Release.
   and sent again when the sauna still heats, with a warning in the status.
 - The strict fingerprint of a Saunum panel is required before turning on,
   changing the setpoint or switching the light.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-saunum/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-saunum/releases/tag/v0.1.1

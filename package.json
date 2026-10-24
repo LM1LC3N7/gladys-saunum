@@ -1,6 +1,6 @@
 {
   "name": "gladys-saunum",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Saunum Leil sauna control panels over local Modbus TCP: temperature, humidity, door, session, setpoint, light; turn off always available, heating off by default. Unofficial, not affiliated with Saunum.",
   "type": "module",
