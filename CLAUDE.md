@@ -71,6 +71,8 @@ test/                             node --test, against the SDK's fake Gladys and
   The exact refusals of each command are in docs/en.md: keep them in step
   with the code. ONE Modbus connection at a time; 1 s between reads, 0.5 s
   before a command. The panel is
-  never read sooner than the interval after the last read (kept in `/data`).
+  not read sooner than the interval after the last read (kept in `/data`),
+  except the reads after a command and every 10 s while a turn off or a start
+  is being checked.
   A read for an old configuration publishes nothing (generation checked after
   every await).

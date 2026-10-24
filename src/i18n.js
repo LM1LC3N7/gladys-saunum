@@ -117,12 +117,16 @@ export const T = {
 export const WARNINGS = {
   launchMismatch: (reason) =>
     both(
-      `Warning: the session started from Gladys did not keep its values (${reason.en}): turned off.`,
-      `Attention : la séance lancée depuis Gladys n’a pas gardé ses valeurs (${reason.fr}) : extinction envoyée.`,
+      `Warning: the session started from Gladys did not keep its values (${reason.en}): turn off asked.`,
+      `Attention : la séance lancée depuis Gladys n’a pas gardé ses valeurs (${reason.fr}) : extinction demandée.`,
     ),
   launchUnverified: both(
-    'Warning: the session started from Gladys could not be checked on a read within 1 min: turned off.',
-    'Attention : la séance lancée depuis Gladys n’a pas pu être vérifiée par une lecture en 1 min : extinction envoyée.',
+    'Warning: the session started from Gladys could not be checked on a read within 1 min: turn off asked.',
+    'Attention : la séance lancée depuis Gladys n’a pas pu être vérifiée par une lecture en 1 min : extinction demandée.',
+  ),
+  launchNotStarted: both(
+    'Warning: the panel did not start the session asked from Gladys (the reads show it off): turn off asked.',
+    'Attention : le panneau n’a pas lancé la séance demandée depuis Gladys (les lectures la montrent arrêtée) : extinction demandée.',
   ),
   stopNoEffect: both(
     'Warning: a turn off did not take effect (the sauna still heats): sent again.',
@@ -134,8 +138,8 @@ export const WARNINGS = {
       'consigne au-dessus de la plus haute, ou celle du préréglage',
     ),
     duration: both(
-      'session duration not the one written',
-      'durée de séance différente de celle écrite',
+      'session duration 0 or longer than the one written',
+      'durée de séance à 0 ou plus longue que celle écrite',
     ),
   },
 };
@@ -216,6 +220,10 @@ export const ERRORS = {
   inProgress: both(
     'The previous start is not confirmed yet: try again in a minute.',
     'Le lancement précédent n’est pas encore confirmé : réessayez dans une minute.',
+  ),
+  tooSlowToWrite: both(
+    'The panel answers too slowly to write everything within 3.5 s.',
+    'Le panneau répond trop lentement pour tout écrire dans les 3,5 s.',
   ),
   tooSlow: both('The panel did not answer in time.', 'Le panneau n’a pas répondu à temps.'),
   unknownState: (reason) =>

@@ -32,9 +32,10 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (SaunumApp)
   minimum); closed after 10 s idle (pysaunum: the panel closes at 20 s).
 - **Identity**: one device per integration, `saunum:panel` (frozen). The
   registers carry no serial number.
-- **Reads**: every 30 s (10 s – 10 min), never sooner than the interval after
+- **Reads**: every 30 s (10 s – 10 min), not sooner than the interval after
   the last one (time kept in `/data`, written before the read, at most once a
-  minute). A read where the session or door register is not 0/1 is refused
+  minute), except the reads after a command (5 s, 20 s) and every 10 s while
+  a turn off or a start from Gladys is being checked. A read where the session or door register is not 0/1 is refused
   as a whole ("invalid data").
 - **Commands**: turn off = one write of register 0 = 0, PROTECT priority
   (before every queued read and command, cuts a read on the wire), verified

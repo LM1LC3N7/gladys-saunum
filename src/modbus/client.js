@@ -217,6 +217,8 @@ export class ModbusClient {
     this.done = undefined;
     /** Every socket created and not closed yet (connecting included): its 'close' promise. */
     this.live = new Map();
+    /** The longest answer time of a request since it was last reset to 0. */
+    this.peakRtt = 0;
     /** Sockets whose connection is not established yet. */
     this.dialing = new Set();
   }
@@ -380,6 +382,12 @@ export class ModbusClient {
     if (this.now() > leaveBy) {
       throw new ModbusError(ERROR_KINDS.LATE);
     }
+    if (pdu[0] === FUNCTION.READ_HOLDING && this.gate.has(PRIORITY.PROTECT)) {
+      // Connected while a turn off waits: the read gives way, nothing sent.
+      const err = new ModbusError(ERROR_KINDS.CLOSED, { detail: 'preempted' });
+      err.preempted = true;
+      throw err;
+    }
     if (beforeSend) {
       try {
         beforeSend();
@@ -406,6 +414,7 @@ export class ModbusClient {
         fn: pdu[0],
         check,
         buffer: Buffer.alloc(0),
+        sentAt: this.now(),
         resolve,
         reject,
         timer: undefined,
@@ -586,6 +595,8 @@ export class ModbusClient {
       return;
     }
     this.settle(pending);
+    // The longest answer time since `peakRtt` was reset (a command estimates its writes with it).
+    this.peakRtt = Math.max(this.peakRtt, this.now() - pending.sentAt);
     pending.resolve(value);
   }
 

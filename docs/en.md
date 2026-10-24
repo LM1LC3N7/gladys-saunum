@@ -127,10 +127,12 @@ session is not started).
 
 **The start is then checked on the reads** (5 s, 20 s, then every 10 s until
 checked, and every read while the session runs): the setpoint must not be 0
-(the preset's) nor above the highest setpoint, the duration must be the one
-written, and on a newer firmware the active duration (register 106) and the
-time left must agree with it. Otherwise, or when no read could check it within
-a minute, the sauna is turned off, with a warning in the logs and the status.
+(the preset's) nor above the highest setpoint of the configuration as it is
+now, and the duration must not be 0 nor longer than the one written (shorter
+is accepted); on a newer firmware the active duration (register 106) must not
+be longer either, and the time left must fit in it. Otherwise, when the reads
+show the session never started, or when no read could check it within a
+minute, a turn off is asked, with a warning in the logs and the status.
 
 ### Setpoint
 

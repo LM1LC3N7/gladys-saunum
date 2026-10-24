@@ -129,8 +129,8 @@
         "fr": "Durée de séance du bouton « Allumer » (min)"
       },
       "description": {
-        "en": "Written before each start from Gladys: the panel stops heating after it (60 min by default, 60 to 720). If a read shows another duration while the session runs, Gladys turns the sauna off.",
-        "fr": "Écrite avant chaque lancement depuis Gladys : le panneau arrête la chauffe après elle (60 min par défaut, de 60 à 720). Si une lecture montre une autre durée pendant la séance, Gladys éteint le sauna."
+        "en": "Written before each start from Gladys: the panel stops heating after it (60 min by default, 60 to 720). If a read shows a duration of 0 or longer than this one while the session runs, Gladys turns the sauna off.",
+        "fr": "Écrite avant chaque lancement depuis Gladys : le panneau arrête la chauffe après elle (60 min par défaut, de 60 à 720). Si une lecture montre une durée à 0 ou plus longue pendant la séance, Gladys éteint le sauna."
       },
       "required": false,
       "default": 60,

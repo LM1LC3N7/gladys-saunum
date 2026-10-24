@@ -137,10 +137,13 @@ séance n’est pas lancée).
 **Le lancement est ensuite vérifié par les lectures** (5 s, 20 s, puis toutes
 les 10 s jusqu’à vérification, et à chaque lecture pendant la séance) : la
 consigne ne doit être ni 0 (celle du préréglage) ni au-dessus de la consigne la
-plus haute, la durée doit être celle écrite, et sur micrologiciel récent la
-durée de séance active (registre 106) et le temps restant doivent
-correspondre. Sinon, ou si aucune lecture n’a pu le vérifier en une minute, le
-sauna est éteint, avec un avertissement dans le journal et le statut.
+plus haute de la configuration actuelle, et la durée ne doit être ni 0 ni plus
+longue que celle écrite (plus courte est acceptée) ; sur micrologiciel récent,
+la durée de séance active (registre 106) ne doit pas être plus longue non plus,
+et le temps restant doit y tenir. Sinon, quand les lectures montrent que la
+séance n’a jamais démarré, ou si aucune lecture n’a pu la vérifier en une
+minute, une extinction est demandée, avec un avertissement dans le journal et
+le statut.
 
 ### Consigne
 

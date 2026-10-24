@@ -504,7 +504,12 @@ export class SaunumApp {
         return;
       }
       if (this.launch && !this.launch.verified && this.mono() >= this.launch.deadline) {
-        this.launchFailed(WARNINGS.launchUnverified);
+        // The reads showed the session off: the panel did not start it; else nothing could check it.
+        this.launchFailed(
+          this.launch.idleSeen && this.panel.online === true
+            ? WARNINGS.launchNotStarted
+            : WARNINGS.launchUnverified,
+        );
       }
       Promise.resolve(p.running)
         .then(() => this.tick())
@@ -1023,10 +1028,11 @@ export class SaunumApp {
 
   /**
    * The fresh read of a command: COMMAND priority, every request leaving by
-   * `sendBy`. Returns the state and the mean time of one request.
+   * `sendBy`. Returns the state and the longest answer time of its requests.
    */
   async freshRead(sendBy, entry) {
     const readStart = this.mono();
+    this.client.peakRtt = 0;
     let data;
     try {
       data = await this.readWords({
@@ -1043,20 +1049,19 @@ export class SaunumApp {
       }
       throw this.refusal(ERRORS.unknownState(readReason(err)), OUTCOME.nothing);
     }
-    const requests = data.extended || data.downgraded ? 3 : 4;
-    const perRequest = (this.mono() - readStart) / requests;
+    const rtt = this.client.peakRtt;
     if (readStart > this.lastSentAt) {
       this.applyRead(data);
       // Shown in the background: the ack never waits for Gladys.
       this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
     }
-    return { data, perRequest };
+    return { data, rtt };
   }
 
   async sendHeat(received, generation, entry, order) {
     const sendBy = received + TIMINGS.commandSendBy;
     const answerBy = received + TIMINGS.commandAnswerBy;
-    const { data, perRequest } = await this.freshRead(sendBy, entry);
+    const { data, rtt } = await this.freshRead(sendBy, entry);
     if (generation !== this.generation) {
       throw this.refusal(ERRORS.unknownDevice, OUTCOME.nothing);
     }
@@ -1088,12 +1093,11 @@ export class SaunumApp {
           [REG.SESSION_ACTIVE, 1],
         ];
     // The last write would leave too late (a slow panel): refused before the first one.
+    // Each write leaves 0.5 s after the answer of the previous one.
     const lastLeaves =
-      this.mono() +
-      writes.length * TIMINGS.requestSpacing +
-      (writes.length - 1) * Math.max(0, perRequest);
+      this.mono() + TIMINGS.requestSpacing + (writes.length - 1) * (rtt + TIMINGS.requestSpacing);
     if (lastLeaves > sendBy) {
-      throw this.refusal(ERRORS.tooSlow, OUTCOME.nothing);
+      throw this.refusal(ERRORS.tooSlowToWrite, OUTCOME.nothing);
     }
     let wrote = 0;
     const outcome = () => (order.setpoint || wrote === 0 ? OUTCOME.nothing : OUTCOME.notStarted);
@@ -1229,17 +1233,24 @@ export class SaunumApp {
       if (l.verified) {
         // The session is over.
         this.dropLaunch();
+      } else {
+        // Read: the session has not started (yet).
+        l.idleSeen = !data.sessionActive;
       }
       return;
     }
+    l.idleSeen = false;
+    // The highest setpoint of the configuration now (the user may have raised it since).
+    const cap = this.config.maxTemperature;
     let problem;
-    if (data.target === undefined || data.target === 0 || data.target > l.cap) {
+    if (data.target === undefined || data.target === 0 || data.target > cap) {
       problem = WARNINGS.reasons.setpoint;
     } else if (
-      data.duration !== l.duration ||
-      (data.activeDuration !== undefined &&
-        data.activeDuration !== 0 &&
-        data.activeDuration !== l.duration) ||
+      // Shorter than written is no risk: only 0 (the preset's) or longer turns it off.
+      data.duration === undefined ||
+      data.duration === 0 ||
+      data.duration > l.duration ||
+      (data.activeDuration !== undefined && data.activeDuration > l.duration) ||
       (data.remainingSeconds !== undefined &&
         data.remainingSeconds > l.duration * 60 + TIMINGS.remainingSlack / SECOND)
     ) {
@@ -1293,9 +1304,13 @@ export class SaunumApp {
   guardStop(sentAt, { sticky = false } = {}) {
     const key = targetKey(this.config);
     if (this.stopGuardActive() && this.stopGuard.target === key) {
-      this.stopGuard.sticky ||= sticky;
-      this.stopGuard.sentAt = Math.max(this.stopGuard.sentAt, sentAt);
-      this.stopGuard.until = Math.max(this.stopGuard.until, this.mono() + TIMINGS.guard);
+      const g = this.stopGuard;
+      g.sentAt = Math.max(g.sentAt, sentAt);
+      // A sticky guard is lifted by time only: only a new start that may land extends it.
+      if (sticky || !g.sticky) {
+        g.until = Math.max(g.until, this.mono() + TIMINGS.guard);
+      }
+      g.sticky ||= sticky;
     } else {
       this.stopGuard = {
         sentAt,

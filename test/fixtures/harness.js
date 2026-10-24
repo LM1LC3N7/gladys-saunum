@@ -46,9 +46,14 @@ export async function setup(
       await settle(5);
     }
   };
-  const connecting = gladys.connect();
+  let connected = false;
+  const connecting = gladys.connect().then(() => (connected = true));
   await settle();
   await advance(3 * SECOND);
+  // A slow panel: the first read may take longer.
+  for (let i = 0; i < 100 && !connected; i += 1) {
+    await advance(100);
+  }
   await connecting;
   t.after(() => app.stop());
   if (create && gladys.fake.discoveredDevices.length > 0) {

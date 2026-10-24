@@ -11,7 +11,7 @@
 // answer): nothing is published, no command decides on it.
 // -----------------------------------------------------------------------------
 
-import { COUNT, DURATION, REG, STATE, TEMPERATURE } from './constants.js';
+import { COUNT, REG, STATE, TEMPERATURE } from './constants.js';
 import { ERROR_KINDS, ILLEGAL_DATA_ADDRESS, ModbusError } from './modbus/client.js';
 
 /** A Modbus answer that does not look like a Saunum panel. */
@@ -49,7 +49,8 @@ export function parsePanel({ control, status, alarms }) {
     throw new InvalidDataError('session or door');
   }
   const target = control[4] === 0 ? 0 : within(control[4], TEMPERATURE.min, TEMPERATURE.max);
-  const duration = control[2] === 0 ? 0 : within(control[2], DURATION.min, 1080);
+  // 0 to 1080 (pysaunum 0.7.0 documents 0 to 720, its main branch 0 or 60 to 1080).
+  const duration = within(control[2], 0, 1080);
   const temperature = within(int16(status[0]), -50, 200);
   const alarmFlags = alarms.map(flag);
   const data = {

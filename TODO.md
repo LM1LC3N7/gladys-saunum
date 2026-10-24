@@ -47,6 +47,14 @@ up to date at the end of every milestone.
       reads, 0.5 s before a command. M14 a true reason for an invalid unit; a
       turn off refused by a busy panel (exception 5/6) tried once more. M15
       dead code removed.
+- [x] **Review 2 fixes** (2026-10-24): I1 the time estimate before a start
+      uses the longest answer time measured on the fresh read (no double
+      spacing): now + 0.5 s + (writes − 1) × (answer + 0.5 s), own reason. M2 a
+      read connecting while a turn off waits gives way (nothing sent). M3 "the
+      panel did not start the session" when the reads show it off. M4 a sticky
+      guard is extended only by a new start that may land. M5 the start check
+      uses the current highest setpoint. M6 only a duration of 0 or longer than
+      written turns off. M7 fingerprint: session duration 0-1080. M8 texts.
 - [ ] **Milestone 2 — real panel**: run against a real Saunum Leil (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: fan speed and duration, sauna type (preset),
@@ -92,8 +100,10 @@ up to date at the end of every milestone.
 - **Start check** (review 1): the panel keeping the setpoint and duration
   written before register 0 = 1 is unverified; every read while a session
   started from Gladys may run checks them (kept in /data), and the sauna is
-  turned off otherwise, or when nothing could be read within 1 min. A change
-  of duration made at the panel during that session also turns it off.
+  turned off otherwise, or when nothing could be read within 1 min. A
+  duration of 0 or longer than written, set at the panel during that session,
+  also turns it off (shorter is accepted); the setpoint is compared with the
+  highest setpoint of the configuration as it is now.
 - **Spacing**: 1 s between reads (pysaunum recommendation), 0.5 s before a
   command (pysaunum minimum): a turn on is up to 4 reads and 3 writes within
   3.5 s.

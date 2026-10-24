@@ -248,13 +248,38 @@ test('9. a configuration that fails to load is tried again; a turn off waits for
   assert.deepEqual(panel.writes(), [[0, 0]]);
 });
 
-// --- 11. A slow panel: refused before the first write ---------------------------
+// --- 11. A slow panel: refused before the first write (review 2: estimate fixed) ---
 
-test('11. a panel too slow for the start: refused before any write', async (t) => {
-  const panel = fakePanel({ delay: 250 });
+for (const delay of [100, 150]) {
+  test(`11. a panel answering in ${delay} ms: the start with 3 writes goes`, async (t) => {
+    const panel = fakePanel({ delay });
+    const { press } = await setup(t, { config: HEAT_CFG, panel });
+    assert.deepEqual(await press('heat-on'), { ok: true });
+    assert.deepEqual(panel.writes(), [
+      [4, 80],
+      [2, 60],
+      [0, 1],
+    ]);
+  });
+}
+
+test('11. pressed while a read is going (0 ms): the start goes', async (t) => {
+  const { app, fire, advance, panel } = await setup(t, { config: HEAT_CFG });
+  await advance(2 * SECOND);
+  const reading = app.tick();
+  await advance(50);
+  const ack = fire('heat-on').then(outcome);
+  await advance(5 * SECOND);
+  await reading;
+  assert.deepEqual(await ack, { ok: true });
+  assert.deepEqual(panel.writes().at(-1), [0, 1]);
+});
+
+test('11. a panel answering in 350 ms: refused before any write', async (t) => {
+  const panel = fakePanel({ delay: 350 });
   const { press } = await setup(t, { config: HEAT_CFG, panel });
   const ack = await press('heat-on');
-  assert.match(ack.error, /pas répondu à temps/);
+  assert.match(ack.error, /répond trop lentement pour tout écrire dans les 3,5 s/);
   assert.match(ack.error, /Rien envoyé/);
   assert.deepEqual(panel.writes(), []);
 });
@@ -292,4 +317,76 @@ test('14. a turn off refused by a busy panel (exception 6) is tried once more', 
   assert.match(ack.error, /nouvel essai/);
   await advance(2 * SECOND);
   assert.equal(panel.holding.get(0), 0);
+});
+
+// --- Review 2 ---------------------------------------------------------------------
+
+test('r2-2. a read connecting while a turn off waits gives way: nothing sent', async (t) => {
+  const panel = fakePanel();
+  const { app, fire, advance } = await setup(t, { panel });
+  await advance(11 * SECOND); // the idle connection is closed
+  panel.connectDelay = 2000;
+  panel.requests.length = 0;
+  const reading = app.tick();
+  await advance(100);
+  const ack = fire('heat-off').then(outcome);
+  await advance(5 * SECOND);
+  await reading;
+  assert.deepEqual(await ack, { ok: true });
+  assert.deepEqual(
+    panel.requests.slice(0, 1).map((r) => [r.fn, r.address]),
+    [[6, 0]],
+    'the turn off is the first request on the new connection',
+  );
+});
+
+test('r2-3. a start the panel ignores: "the panel did not start the session"', async (t) => {
+  const panel = fakePanel({
+    behave: (r) => (r.fn === 6 && r.address === 0 && r.value === 1 ? 'echo-only' : undefined),
+  });
+  const { press, advance, gladys } = await setup(t, { config: HEAT_CFG, panel });
+  assert.deepEqual(await press('heat-on'), { ok: true });
+  await advance(70 * SECOND);
+  assert.match(status(gladys), /n’a pas lancé la séance/);
+  assert.ok(stops(panel) >= 1);
+});
+
+test('r2-4. repeated turn offs never extend a sticky guard', async (t) => {
+  const { app, advance } = await setup(t);
+  app.guardStop(Date.now(), { sticky: true });
+  const until = app.stopGuard.until;
+  await advance(60 * SECOND);
+  app.guardStop(Date.now());
+  assert.equal(app.stopGuard.until, until);
+});
+
+test('r2-5. a highest setpoint raised during the session: the new cap applies', async (t) => {
+  const { press, advance, gladys, panel } = await setup(t, {
+    config: { ...HEAT_CFG, max_temperature: 90 },
+  });
+  assert.deepEqual(await press('heat-on'), { ok: true });
+  const updating = gladys.fake.configUpdated({ ...HEAT_CFG, max_temperature: 95 });
+  await advance(SECOND);
+  await updating;
+  panel.set(4, 95);
+  await advance(30 * SECOND);
+  assert.equal(stops(panel), 0);
+});
+
+test('r2-6. a shorter duration set at the panel does not turn the sauna off', async (t) => {
+  const panel = fakePanel({ onStart: (p) => p.set(2, 60) });
+  const { press, advance } = await setup(t, {
+    config: { ...HEAT_CFG, session_duration: 90 },
+    panel,
+  });
+  assert.deepEqual(await press('heat-on'), { ok: true });
+  await advance(30 * SECOND);
+  assert.equal(stops(panel), 0);
+});
+
+test('r2-7. a session duration of 30 min is still a Saunum panel', async (t) => {
+  const panel = fakePanel();
+  panel.set(2, 30);
+  const { press } = await setup(t, { panel });
+  assert.deepEqual(await press('light', 1), { ok: true });
 });
