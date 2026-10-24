@@ -1,177 +1,201 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Saunum",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Saunum Leil sauna panels over local Modbus TCP: temperature, door, session; on/off.",
+    "fr": "Panneaux de sauna Saunum Leil en Modbus TCP local : température, porte, séance ; marche/arrêt."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-saunum:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-saunum/main/cover.png",
+  "categories": ["appliances", "climate"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Saunum sauna",
+        "fr": "Votre sauna Saunum"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Shows a Saunum Leil sauna in Gladys through the Modbus TCP of its control panel on your local network: session, state, temperature, humidity, door, heater elements, alarm, setpoint, time left, light. Turning off always works; heating from Gladys (turning on and the setpoint) is off until you allow it below, and is refused while the door is open or an alarm is on. Enter the address of the panel, save, then add the sauna from the Discovery tab. A sauna heats to a high temperature: never heat it from afar without making sure nobody is inside and nothing lies on the stove. Never tested with a real device. Not affiliated with Saunum.",
+        "fr": "Affiche un sauna Saunum Leil dans Gladys par le Modbus TCP de son panneau de commande sur votre réseau local : séance, état, température, humidité, porte, résistances, alarme, consigne, temps restant, lumière. L'extinction fonctionne toujours ; le chauffage depuis Gladys (allumage et consigne) reste désactivé tant que vous ne l'autorisez pas ci-dessous, et il est refusé porte ouverte ou alarme active. Saisissez l'adresse du panneau, enregistrez, puis ajoutez le sauna depuis l'onglet Découverte. Un sauna chauffe très fort : ne le lancez jamais à distance sans vous assurer que personne n'est dedans et que rien ne repose sur le poêle. Jamais testé avec un vrai appareil. Sans lien avec Saunum."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-saunum/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-saunum/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "address",
+      "type": "string",
+      "label": {
+        "en": "Address of the control panel",
+        "fr": "Adresse du panneau de commande"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
-    },
-    {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "Its IPv4 address (best kept fixed in your router) or host name, optionally followed by \":port\" (502 by default). Modbus TCP must be on at the panel. The panel takes one Modbus connection at a time: no other Modbus client (Home Assistant…) should use it at the same time.",
+        "fr": "Son adresse IPv4 (à fixer de préférence dans votre box) ou son nom d'hôte, suivi éventuellement de « :port » (502 par défaut). Le Modbus TCP doit être activé sur le panneau. Le panneau n'accepte qu'une connexion Modbus à la fois : aucun autre client Modbus (Home Assistant…) ne doit l'utiliser en même temps."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
+      "placeholder": {
+        "en": "192.168.1.80",
+        "fr": "192.168.1.80"
+      },
       "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "default": ""
     },
     {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
-    },
-    {
-      "key": "poll_frequency",
+      "key": "unit_id",
       "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "label": {
+        "en": "Modbus unit id",
+        "fr": "Identifiant d'unité Modbus"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "1 unless you changed it at the panel.",
+        "fr": "1 sauf si vous l'avez changé sur le panneau."
       },
       "required": false,
-      "default": 300,
+      "default": 1,
+      "min": 1,
+      "max": 247
+    },
+    {
+      "key": "allow_heating",
+      "type": "boolean",
+      "label": {
+        "en": "Allow heating from Gladys",
+        "fr": "Autoriser le chauffage depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default. On: the \"Turn on (heat)\" button and the setpoint may start or change heating, only when a fresh read of the panel shows the door closed, no alarm and nothing blocking a start. Off: they refuse every request. Turning off always works.",
+        "fr": "Désactivé par défaut. Activé : le bouton « Allumer (chauffer) » et la consigne peuvent lancer ou modifier la chauffe, seulement si une lecture fraîche du panneau montre la porte fermée, aucune alarme et rien qui empêche le démarrage. Désactivé : ils refusent toute demande. L'extinction fonctionne toujours."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "start_temperature",
+      "type": "number",
+      "label": {
+        "en": "Setpoint of the \"Turn on\" button (°C)",
+        "fr": "Consigne du bouton « Allumer » (°C)"
+      },
+      "description": {
+        "en": "Written before each start from Gladys, never above the highest setpoint below.",
+        "fr": "Écrite avant chaque lancement depuis Gladys, jamais au-dessus de la consigne la plus haute ci-dessous."
+      },
+      "required": false,
+      "default": 80,
+      "min": 40,
+      "max": 100
+    },
+    {
+      "key": "max_temperature",
+      "type": "number",
+      "label": {
+        "en": "Highest setpoint (°C)",
+        "fr": "Consigne la plus haute (°C)"
+      },
+      "description": {
+        "en": "Gladys never asks for more (90 °C by default; 100 °C, the limit of the panel, at most).",
+        "fr": "Gladys ne demande jamais plus (90 °C par défaut ; 100 °C, la limite du panneau, au plus)."
+      },
+      "required": false,
+      "default": 90,
+      "min": 40,
+      "max": 100
+    },
+    {
+      "key": "session_duration",
+      "type": "number",
+      "label": {
+        "en": "Session duration of the \"Turn on\" button (min)",
+        "fr": "Durée de séance du bouton « Allumer » (min)"
+      },
+      "description": {
+        "en": "Written before each start from Gladys: the panel stops heating after it (60 min by default, 60 to 720).",
+        "fr": "Écrite avant chaque lancement depuis Gladys : le panneau arrête la chauffe après elle (60 min par défaut, de 60 à 720)."
+      },
+      "required": false,
+      "default": 60,
       "min": 60,
-      "max": 3600
+      "max": 720
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "How often the panel is read, in seconds (never more often, even after a restart; a few seconds after each command too).",
+        "fr": "Fréquence de lecture du panneau, en secondes (jamais plus souvent, même après un redémarrage ; quelques secondes après chaque commande aussi)."
+      },
+      "required": false,
+      "default": 30,
+      "min": 10,
+      "max": 600
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the feature names of the devices added from now on, for the state texts and for the command errors.",
+        "fr": "Sert aux noms des fonctionnalités des appareils ajoutés désormais, aux textes d'état et aux erreurs des commandes."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
+      "description": {
+        "en": "Reads the panel once, unless it was read less than one interval ago (then shows that read).",
+        "fr": "Lit le panneau une fois, sauf s'il a été lu il y a moins d'un intervalle (affiche alors cette lecture)."
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }
