@@ -217,8 +217,6 @@ export class ModbusClient {
     this.done = undefined;
     /** Every socket created and not closed yet (connecting included): its 'close' promise. */
     this.live = new Map();
-    /** The longest answer time of a request since it was last reset to 0. */
-    this.peakRtt = 0;
     /** Sockets whose connection is not established yet. */
     this.dialing = new Set();
   }
@@ -369,7 +367,7 @@ export class ModbusClient {
    */
   async transact(
     pdu,
-    { timeoutMs = TIMINGS.requestTimeout, startBy, answerBy, beforeSend },
+    { timeoutMs = TIMINGS.requestTimeout, startBy, answerBy, beforeSend, onAnswer },
     check,
   ) {
     if (this.closed) {
@@ -415,6 +413,7 @@ export class ModbusClient {
         check,
         buffer: Buffer.alloc(0),
         sentAt: this.now(),
+        onAnswer,
         resolve,
         reject,
         timer: undefined,
@@ -595,8 +594,8 @@ export class ModbusClient {
       return;
     }
     this.settle(pending);
-    // The longest answer time since `peakRtt` was reset (a command estimates its writes with it).
-    this.peakRtt = Math.max(this.peakRtt, this.now() - pending.sentAt);
+    // The answer time of this request, to its caller only (a command estimates its writes with it).
+    pending.onAnswer?.(this.now() - pending.sentAt);
     pending.resolve(value);
   }
 

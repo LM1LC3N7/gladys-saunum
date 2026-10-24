@@ -1032,13 +1032,17 @@ export class SaunumApp {
    */
   async freshRead(sendBy, entry) {
     const readStart = this.mono();
-    this.client.peakRtt = 0;
+    // The answer times of this read's own requests (never those of another read).
+    let rtt = 0;
     let data;
     try {
       data = await this.readWords({
         priority: PRIORITY.COMMAND,
         startBy: sendBy,
         answerBy: sendBy,
+        onAnswer: (ms) => {
+          rtt = Math.max(rtt, ms);
+        },
       });
     } catch (err) {
       if (entry && entry.seq !== this.protectSeq) {
@@ -1049,7 +1053,6 @@ export class SaunumApp {
       }
       throw this.refusal(ERRORS.unknownState(readReason(err)), OUTCOME.nothing);
     }
-    const rtt = this.client.peakRtt;
     if (readStart > this.lastSentAt) {
       this.applyRead(data);
       // Shown in the background: the ack never waits for Gladys.
@@ -1393,6 +1396,8 @@ export class SaunumApp {
     this.protectSeq += 1;
     const sentAt = this.mono();
     this.guardStop(sentAt, { sticky: this.startMayLand });
+    // A turn off ends the check of a start (a start that may still land is covered by the guard).
+    this.dropLaunch();
     this.logger.info('Saunum: turn off');
     const track = { left: false, retried: false };
     const sending = this.sendStop({ track });

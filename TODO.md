@@ -55,6 +55,15 @@ up to date at the end of every milestone.
       guard is extended only by a new start that may land. M5 the start check
       uses the current highest setpoint. M6 only a duration of 0 or longer than
       written turns off. M7 fingerprint: session duration 0-1080. M8 texts.
+- [x] **Review 3 minors** (2026-10-24, approved): M1 a turn off ends the
+      check of a start (no second turn off nor false warning). M2 the fresh
+      read returns the answer times of its own requests (no shared field).
+      M3 test at 100-150 ms with 3 writes; slow-panel workaround documented.
+      M5 docs: the turn off also waits for a connection being opened.
+- [ ] **Review 3, minor 4 (open)**: a non-sticky turn off during a sticky
+      guard is verified only for the time left of that guard; at the end of
+      the sticky part, continue as a non-sticky guard until a read shows the
+      sauna off.
 - [ ] **Milestone 2 — real panel**: run against a real Saunum Leil (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: fan speed and duration, sauna type (preset),

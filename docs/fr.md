@@ -72,7 +72,7 @@ de lectures en échec, ni de la première lecture après un redémarrage. Elle e
 toujours écrite (jamais « déjà éteint »), passe avant toute lecture ou commande
 en attente, coupe une lecture déjà partie, et une écriture de chauffe pas
 encore partie s’efface devant elle. Elle n’attend qu’une écriture déjà partie
-et l’espacement de 0,5 s qui suit.
+ou l’ouverture de la connexion en cours, et l’espacement de 0,5 s qui suit.
 
 Elle est acceptée sur l’écho du panneau, puis **vérifiée par les lectures** :
 le panneau est relu 5 s et 20 s après, et toutes les 10 s pendant 2 minutes au
@@ -124,7 +124,10 @@ Refusé quand :
   veille » (ou il est inconnu), ou le panneau signale une raison de ne pas
   démarrer ;
 - les écritures ne peuvent pas toutes partir dans les 3,5 s après le clic
-  (estimé après la lecture fraîche : rien n’est alors écrit) ;
+  (estimé après la lecture fraîche : rien n’est alors écrit). Un panneau lent
+  (environ 200 ms par réponse ou plus) ne peut pas recevoir consigne, durée et
+  lancement dans ce délai : réglez au panneau la même consigne et la même durée
+  de séance que la configuration, il ne reste alors que le lancement à écrire ;
 - le panneau refuse une écriture (exception Modbus) ou une écriture ne peut pas
   partir.
 

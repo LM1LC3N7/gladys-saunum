@@ -69,7 +69,8 @@ Writes "session off" (register 0 = 0) to the panel. It does not depend on the
 first read after a restart. It is always written (never "already off"), goes
 before every read or command waiting in the queue, cuts a read already on the
 wire, and a heating write not sent yet gives way to it. It only waits for a
-write already on the wire and the 0.5 s spacing after it.
+write already on the wire or a connection being opened, and the 0.5 s spacing
+after it.
 
 It is accepted on the echo of the panel, then **verified by the reads**: the
 panel is read 5 s and 20 s later, and every 10 s for up to 2 minutes, until a
@@ -116,7 +117,10 @@ Refused when:
 - the sauna is cooling down; on a newer firmware: the state is not "Standby"
   (or unknown), or the panel reports a reason not to start;
 - the writes cannot all leave within 3.5 s of the click (estimated after the
-  fresh read: then nothing is written);
+  fresh read: then nothing is written). A slow panel (about 200 ms per answer
+  or more) cannot take the setpoint, the duration and the start in that time:
+  set at the panel the same setpoint and session duration as the
+  configuration, so that only the start is left to write;
 - the panel refuses a write (Modbus exception) or a write cannot be sent.
 
 A session already on: nothing is written (accepted). Otherwise it writes the

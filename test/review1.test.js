@@ -390,3 +390,14 @@ test('r2-7. a session duration of 30 min is still a Saunum panel', async (t) => 
   const { press } = await setup(t, { panel });
   assert.deepEqual(await press('light', 1), { ok: true });
 });
+
+// --- Review 3 ---------------------------------------------------------------------
+
+test('r3-1. turn on then turn off at once: no second turn off, no warning', async (t) => {
+  const { press, advance, panel, gladys } = await setup(t, { config: HEAT_CFG });
+  assert.deepEqual(await press('heat-on'), { ok: true });
+  assert.deepEqual(await press('heat-off', 1, SECOND), { ok: true });
+  await advance(90 * SECOND);
+  assert.equal(stops(panel), 1);
+  assert.doesNotMatch(status(gladys), /Attention/);
+});
