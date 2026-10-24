@@ -127,7 +127,12 @@ export const TIMINGS = {
   connectTimeout: 3 * SECOND,
   /** One Modbus request of the polling (pysaunum: at least 2 s). */
   requestTimeout: 3 * SECOND,
-  /** pysaunum: at least 500 ms between two Modbus requests. */
+  /**
+   * pysaunum: at least 500 ms between two Modbus requests, 1000 ms
+   * recommended. Reads keep 1000 ms; commands and turn offs the 500 ms
+   * minimum (a turn on is a read and three writes within 3.5 s).
+   */
+  readSpacing: 1_000,
   requestSpacing: 500,
   /** The panel closes an idle connection after 20 s: we close it first. */
   idleClose: 10 * SECOND,
@@ -158,6 +163,14 @@ export const TIMINGS = {
   stopReasserts: 3,
   /** A setpoint is refused this long after a turn off. */
   setpointAfterStop: 2 * MINUTE,
-  /** "Nothing to send" may be decided on a read this recent (never a decision to send). */
-  recentRead: 5 * SECOND,
+  /** While a guard or a start to verify is pending, the panel is read this often. */
+  watchEvery: 10 * SECOND,
+  /** A start from Gladys not verified on a read by then is turned off. */
+  launchVerifyBy: MINUTE,
+  /** The time left of a session may exceed the duration written by this much. */
+  remainingSlack: 2 * MINUTE,
+  /** The configuration could not be loaded: tried again after 5, 15, 30, then every 60 s. */
+  configRetry: [5 * SECOND, 15 * SECOND, 30 * SECOND, MINUTE],
+  /** A turn off refused by a busy panel (Modbus exception 5 or 6) is tried once more. */
+  busyRetry: 1,
 };

@@ -85,6 +85,11 @@ export const T = {
     'L’identifiant d’unité Modbus doit être un nombre entier de 1 à 247.',
   ),
   connecting: both('Connecting to the panel…', 'Connexion au panneau…'),
+  configRetry: (wait) =>
+    both(
+      `The configuration could not be loaded from Gladys: next try in ${wait.en}.`,
+      `La configuration n’a pas pu être chargée depuis Gladys : nouvel essai dans ${wait.fr}.`,
+    ),
   waiting: (wait) =>
     both(`Next read of the sauna in ${wait.en}.`, `Prochaine lecture du sauna dans ${wait.fr}.`),
   connected: (summary) => both(`Connected: ${summary.en}.`, `Connecté : ${summary.fr}.`),
@@ -108,6 +113,33 @@ export const T = {
   },
 };
 
+/** Warnings kept in the status until the next start from Gladys or a new configuration. */
+export const WARNINGS = {
+  launchMismatch: (reason) =>
+    both(
+      `Warning: the session started from Gladys did not keep its values (${reason.en}): turned off.`,
+      `Attention : la séance lancée depuis Gladys n’a pas gardé ses valeurs (${reason.fr}) : extinction envoyée.`,
+    ),
+  launchUnverified: both(
+    'Warning: the session started from Gladys could not be checked on a read within 1 min: turned off.',
+    'Attention : la séance lancée depuis Gladys n’a pas pu être vérifiée par une lecture en 1 min : extinction envoyée.',
+  ),
+  stopNoEffect: both(
+    'Warning: a turn off did not take effect (the sauna still heats): sent again.',
+    'Attention : une extinction n’a pas pris effet (le sauna chauffe encore) : renvoyée.',
+  ),
+  reasons: {
+    setpoint: both(
+      'setpoint above the highest one, or the preset’s',
+      'consigne au-dessus de la plus haute, ou celle du préréglage',
+    ),
+    duration: both(
+      'session duration not the one written',
+      'durée de séance différente de celle écrite',
+    ),
+  },
+};
+
 /** The end of a refusal: what was (not) written. */
 export const OUTCOME = {
   nothing: both('Nothing sent.', 'Rien envoyé.'),
@@ -128,14 +160,43 @@ export const ERRORS = {
       `La consigne doit être un nombre entier de ${min} à ${max} °C (« Consigne la plus haute »).`,
     ),
   heatingDisabled: both(
-    'Heating from Gladys is off: turn on “Allow heating from Gladys” in the configuration. Turning off always works.',
-    'Le chauffage depuis Gladys est désactivé : activez « Autoriser le chauffage depuis Gladys » dans la configuration. L’extinction fonctionne toujours.',
+    'Heating from Gladys is off: turn on “Allow heating from Gladys” in the configuration. Turning off does not depend on this option.',
+    'Le chauffage depuis Gladys est désactivé : activez « Autoriser le chauffage depuis Gladys » dans la configuration. L’extinction ne dépend pas de cette option.',
   ),
   unknownDevice: both(
     'This device is not the panel of this integration, or its configuration changed.',
     'Cet appareil n’est pas le panneau de cette intégration, ou sa configuration a changé.',
   ),
   noConfig: both('No panel address configured.', 'Aucune adresse de panneau configurée.'),
+  badAddress: both(
+    'The panel address of the configuration is not valid.',
+    'L’adresse du panneau dans la configuration n’est pas valide.',
+  ),
+  badUnit: both(
+    'The Modbus unit id of the configuration is not valid (1 to 247).',
+    'L’identifiant d’unité Modbus de la configuration n’est pas valide (1 à 247).',
+  ),
+  notLoaded: both(
+    'The configuration is not loaded yet.',
+    'La configuration n’est pas encore chargée.',
+  ),
+  foreign: both(
+    'The device at this address does not look like a Saunum panel (a register outside its documented range).',
+    'L’appareil à cette adresse ne ressemble pas à un panneau Saunum (un registre hors de sa plage documentée).',
+  ),
+  identityChanged: both(
+    'The panel no longer serves the registers 105-118 it served before (another device at this address?): heating refused.',
+    'Le panneau ne sert plus les registres 105 à 118 qu’il servait (un autre appareil à cette adresse ?) : chauffe refusée.',
+  ),
+  notYetSent: both(
+    'Not sent yet (panel busy or connection in progress): it leaves as soon as possible, check the sauna.',
+    'Pas encore envoyée (panneau occupé ou connexion en cours) : elle part dès que possible, vérifiez le sauna.',
+  ),
+  checkSauna: both('Check the sauna.', 'Vérifiez le sauna.'),
+  busyRetried: both(
+    'Tried once more; check the sauna.',
+    'Un nouvel essai est fait ; vérifiez le sauna.',
+  ),
   stopMeanwhile: both(
     'A turn off was asked meanwhile.',
     'Une extinction a été demandée entre-temps.',

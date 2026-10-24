@@ -97,3 +97,14 @@ test('the docs say when turning on is refused', () => {
     assert.match(text, /door|porte/i, file);
   }
 });
+
+test('no false absolute about the turn off (review 1)', () => {
+  for (const file of [...DOCS, 'src/app.js']) {
+    const text = readFileSync(new URL(file, root), 'utf8');
+    assert.doesNotMatch(
+      text,
+      /always works|fonctionne toujours|never held back|jamais retenue|n’ouvre jamais deux/i,
+      file,
+    );
+  }
+});

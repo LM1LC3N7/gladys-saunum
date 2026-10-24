@@ -321,3 +321,49 @@ test('an idle connection is closed after 10 s', async (t) => {
   assert.equal(socket.destroyed, true);
   c.close();
 });
+
+test('close(): a connection still being opened is destroyed and awaited', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const sockets = [];
+  const connect = () => {
+    const socket = new EventEmitter();
+    socket.destroyed = false;
+    socket.write = () => true;
+    socket.destroy = () => {
+      if (!socket.destroyed) {
+        socket.destroyed = true;
+        setImmediate(() => socket.emit('close'));
+      }
+    };
+    sockets.push(socket);
+    return socket; // never connects by itself
+  };
+  const c = client(connect);
+  const read = c.readHolding(0, 7, { startBy: Date.now() + 100 });
+  await settle();
+  t.mock.timers.tick(100);
+  await assert.rejects(read, (err) => err.kind === ERROR_KINDS.LATE && err.sent === false);
+  assert.equal(sockets.length, 1);
+  assert.equal(sockets[0].destroyed, false, 'still connecting after the LATE');
+  let closed = false;
+  const closing = c.close().then(() => (closed = true));
+  await settle();
+  assert.equal(sockets[0].destroyed, true);
+  await closing;
+  assert.equal(closed, true);
+});
+
+test('a READ on the wire is cut for a turn off; a write never is', async () => {
+  const { sockets, connect } = scripted();
+  const c = client(connect);
+  const read = c.readHolding(0, 7);
+  await sentFrame(sockets);
+  c.preemptRead();
+  await assert.rejects(read, (err) => err.preempted === true && err.sent === true);
+  const write = c.writeRegister(0, 1);
+  const { socket, frame: sent } = await sentFrame(sockets);
+  c.preemptRead();
+  socket.emit('data', frame(sent.readUInt16BE(0), 1, [6, 0, 0, 0, 1]));
+  assert.equal(await write, 1);
+  c.close();
+});

@@ -72,18 +72,53 @@ export function parsePanel({ control, status, alarms }) {
     alarms: alarmFlags,
     extended: status.length === COUNT.STATUS_FULL,
     humidity: undefined,
+    /** Register 106: the duration of the active session in minutes (0 when inactive). */
+    activeDuration: undefined,
     remainingSeconds: undefined,
     state: undefined,
     startBlock: undefined,
+    /** Whether every register read holds a value a Saunum panel documents. */
+    fingerprint: false,
   };
   if (data.extended) {
     data.humidity = within(status[5], 0, 100);
+    data.activeDuration = within(status[6], 0, 1080);
     data.remainingSeconds = within(status[7], 0, 0xffff);
     data.state = within(status[9], STATE.STANDBY, STATE.WAITING_FOR_DOOR);
     // A 32-bit mask (high word first): 0 means nothing blocks a start.
     data.startBlock = status[17] * 0x10000 + status[18];
   }
+  data.fingerprint = fingerprintOk(control, status, data);
   return data;
+}
+
+/**
+ * The strict fingerprint of a Saunum panel, required before any write but a
+ * turn off: every register read within the range pysaunum documents (fan
+ * duration up to 30 min: the range of pysaunum 0.7.0, 20 on the main branch;
+ * sauna type: a preset index, bounded to 0-31 here).
+ */
+function fingerprintOk(control, status, data) {
+  const ok =
+    within(control[1], 0, 31) !== undefined &&
+    data.duration !== undefined &&
+    within(control[3], 0, 30) !== undefined &&
+    data.target !== undefined &&
+    within(control[5], 0, 3) !== undefined &&
+    data.light !== undefined &&
+    data.temperature !== undefined &&
+    data.heaters !== undefined &&
+    data.alarms.every((a) => a !== undefined);
+  if (!ok || !data.extended) {
+    return ok;
+  }
+  return (
+    data.state !== undefined &&
+    data.humidity !== undefined &&
+    data.activeDuration !== undefined &&
+    flag(status[10]) !== undefined &&
+    flag(status[11]) !== undefined
+  );
 }
 
 /**

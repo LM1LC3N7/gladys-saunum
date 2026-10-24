@@ -7,7 +7,8 @@ device.** Not affiliated with Saunum.
 > **Safety.** A sauna gets very hot. Never start heating from afar without
 > making sure nobody is inside and nothing lies on the stove. Turning on from
 > Gladys is **off by default** and refused while the door is open; turning off
-> is never held back by the integration.
+> does not depend on that option (the cases where it can still fail are listed
+> below).
 
 ## What you get
 
@@ -24,7 +25,7 @@ A sauna in the Discovery tab, with:
 - two buttons: **Turn on (heat)** and **Turn off**.
 
 No switch for the session: an "everything on" from Google Home, Alexa, HomeKit,
-MCP or a scene can never start the sauna.
+MCP or a scene does not reach the start button.
 
 ## Setup
 
@@ -40,16 +41,19 @@ MCP or a scene can never start the sauna.
    panel) and the **session duration of the "Turn on" button** (60 min by
    default, 60 to 720).
 
-The panel takes **one Modbus connection at a time**: do not use another
-Modbus client (Home Assistant, a script) on it at the same time. The
-integration itself never opens two connections, waits 500 ms between two
-requests (as the Saunum library recommends), and closes its connection after
-10 s without a request (the panel would close it at 20 s).
+The panel may accept **only one Modbus connection at a time** (not confirmed
+on a real panel): avoid using another Modbus client (Home Assistant, a script)
+on it at the same time. The integration opens one connection at a time (a new
+address waits until the previous connection, even one still being opened, is
+closed), waits 1 s between two reads and 0.5 s before a command (the
+recommended and the minimum spacing of the pysaunum library), and closes its
+connection after 10 s without a request (pysaunum says the panel closes it at
+20 s).
 
-The panel is read every 30 s (10 s to 10 min), **never more often**, even
-after a restart, a reconnection to Gladys, the "Test the connection" button or
-a Discovery scan; a few seconds after each command, it is read again to show
-the result.
+The panel is read every 30 s (10 s to 10 min), not more often after a restart,
+a reconnection to Gladys, the "Test the connection" button or a Discovery
+scan. Exceptions: a few seconds after each command, and every 10 s while a
+turn off or a start from Gladys is being checked (see below).
 
 There is one panel per integration: the device keeps its id when you change
 the address (a new DHCP lease, a replaced panel). The Modbus registers hold no
@@ -58,40 +62,102 @@ address only for the same sauna.
 
 ## The commands
 
-- **Turn off** writes "session off" to the panel. It is not held back by the
-  option, by a heating command in progress, by failed reads, nor by a restart
-  (it works before the first read). It is always written (never "already
-  off"), goes before every read or command waiting in the queue (it only waits
-  for the request already on the wire and the 0.5 s pause after it), and a heating command
-  not written yet gives way to it. It is confirmed by the echo of the panel;
-  without an answer within 4.3 s, Gladys shows "Sent, without confirmation".
-  It still fails when the panel cannot be reached ("Not sent") or refuses it
-  (a Modbus exception): check the sauna then.
-- When a start may still land after a turn off (it was sent but not answered),
-  every read of the next two minutes that sees the sauna heating writes "off"
-  again (3 times at most, kept across a restart). This may also turn off a
-  session started at the panel within those two minutes: that is intended.
-- **Turn on (heat)** and the **setpoint** are refused while "Allow heating
-  from Gladys" is off. On, they read the panel first (never the state in
-  memory) and are refused when:
-  - the door is open (for the setpoint: while a session is on);
-  - an alarm is on, or an alarm register holds an unknown value;
-  - the panel reports a reason not to start (newer firmware), or its state is
-    not "Standby" (scheduled, waiting for the door, cooling down);
-  - a value they need is unknown (setpoint, controller state);
-  - a turn off is in flight, waiting, or not confirmed yet; for the setpoint,
-    also during the 2 min after a turn off;
-  - a previous start is not confirmed yet, or another heating command is in
-    progress;
-  - the reads and writes cannot all leave within 3.5 s of the click.
-    The option and the turn off are checked again right before each write.
-- **Turn on** writes the setpoint of the "Turn on" button and the session
-  duration of the configuration (when the panel holds other values), then
-  starts the session. A session already on: nothing is written.
-- **The setpoint** is a whole number from 40 °C to the highest setpoint; it is
-  refused while the sauna cools down (it could heat again). With no session
-  on, it is kept by the panel, but "Turn on" writes its own setpoint.
-- **The light** is a plain on/off, once the panel has been read.
+### Turn off
+
+Writes "session off" (register 0 = 0) to the panel. It does not depend on the
+"Allow heating" option, a heating command in progress, failed reads, or the
+first read after a restart. It is always written (never "already off"), goes
+before every read or command waiting in the queue, cuts a read already on the
+wire, and a heating write not sent yet gives way to it. It only waits for a
+write already on the wire and the 0.5 s spacing after it.
+
+It is accepted on the echo of the panel, then **verified by the reads**: the
+panel is read 5 s and 20 s later, and every 10 s for up to 2 minutes, until a
+read shows the sauna off. A read showing it heating again (with no start from
+Gladys after the turn off) writes "off" again, 3 times at most, with a warning
+in the logs and in the status ("a turn off did not take effect"). This may also
+turn off a session started at the panel within those two minutes: that is
+intended. When a start may still land after the turn off (sent without answer),
+that guard lasts 2 minutes whatever the reads show, and is kept across a
+restart.
+
+Turn off is refused, or fails, when:
+
+- the value is not 1, or the device is not the panel of this integration;
+- the configuration is not loaded within 3.5 s of the click ("The configuration
+  is not loaded yet"), or there is no valid address or Modbus unit id;
+- the panel cannot be reached ("Not sent", check the sauna);
+- the panel refuses the write (a Modbus exception; a busy panel, exception 5
+  or 6, gets one more try);
+- it is still waiting at 4.3 s (a write on the wire, a slow connection): "Not
+  sent yet", it leaves as soon as possible;
+- it left but the panel did not answer in time: "Sent, without confirmation".
+
+### Turn on (heat)
+
+Refused when:
+
+- "Allow heating from Gladys" is off (checked on arrival and again right before
+  each write);
+- the configuration is not loaded, or has no valid address or unit id; the
+  device is not the panel of this integration; the configuration changes during
+  the command;
+- another heating command is in progress, or a previous start is not confirmed
+  yet;
+- a turn off is in flight, waiting, or not verified yet by a read (or one is
+  pressed during the command);
+- the fresh read fails (unreachable, no answer, invalid data) or cannot be done
+  within 3.5 s;
+- the device does not carry the fingerprint of a Saunum panel (a register
+  outside the range pysaunum documents), or a panel that served registers
+  105-118 no longer does;
+- an alarm is on, or an alarm register holds an unknown value;
+- the door is open;
+- the sauna is cooling down; on a newer firmware: the state is not "Standby"
+  (or unknown), or the panel reports a reason not to start;
+- the writes cannot all leave within 3.5 s of the click (estimated after the
+  fresh read: then nothing is written);
+- the panel refuses a write (Modbus exception) or a write cannot be sent.
+
+A session already on: nothing is written (accepted). Otherwise it writes the
+setpoint of the "Turn on" button and the session duration of the configuration
+(when the panel holds other values), then starts the session. If the start is
+refused after the setpoint or duration was written, the message says so (the
+session is not started).
+
+**The start is then checked on the reads** (5 s, 20 s, then every 10 s until
+checked, and every read while the session runs): the setpoint must not be 0
+(the preset's) nor above the highest setpoint, the duration must be the one
+written, and on a newer firmware the active duration (register 106) and the
+time left must agree with it. Otherwise, or when no read could check it within
+a minute, the sauna is turned off, with a warning in the logs and the status.
+
+### Setpoint
+
+A whole number from 40 °C to the highest setpoint. Refused when:
+
+- the option is off, the configuration is not loaded or not valid, the device is
+  not ours, or the configuration changes during the command;
+- another heating command is in progress; a turn off is in flight, waiting or
+  not verified yet; or a turn off was pressed less than 2 min ago;
+- the fresh read fails or cannot be done within 3.5 s; the fingerprint is
+  missing, or registers 105-118 are no longer served;
+- an alarm is on or unknown; the current setpoint is unknown;
+- the sauna cools down (register 109 when served; otherwise a session on with a
+  setpoint of 0);
+- the door is open: on a newer firmware in every state but "Standby"; on an
+  older one, while a session is on;
+- the write cannot leave within 3.5 s, or the panel refuses it.
+
+The same setpoint already set: nothing is written. With no session on, "Turn
+on" writes its own setpoint anyway.
+
+### Light
+
+On/off (0 or 1), after a fresh read with the fingerprint of a Saunum panel.
+Refused when the value is not 0 or 1, the configuration is not loaded or not
+valid, the fresh read fails or lacks the fingerprint, or the write cannot be
+sent or is refused.
 
 Every command answers within 4.3 s; a write the panel received without
 answering in time is "Sent, without confirmation".
@@ -110,3 +176,6 @@ answering in time is "Sent, without confirmation".
   that no other Modbus client holds the connection.
 - "invalid data": the device at this address does not answer like a Saunum
   panel (a session or door register outside 0/1).
+- A warning in the status ("the session started from Gladys did not keep its
+  values", "a turn off did not take effect"): check the sauna; it stays until
+  the next start from Gladys or a new configuration.

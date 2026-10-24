@@ -61,13 +61,16 @@ export function panelRegisters() {
  * (exception 2). `behave(request, panel)`: per request, return undefined
  * (answer normally), `'silent'` (no answer), `{ exception: code }`, `'close'`
  * (drop the connection) or, for a write, `'silent-applied'` (applied, no
- * answer). `delay`: ms before each answer (setTimeout, mocked clock).
+ * answer) or `'echo-only'` (answered, not applied). `connectDelay`: ms before
+ * a connection is established (setTimeout, mocked clock). `delay`: ms before each answer (setTimeout, mocked clock).
  */
 export function fakePanel({
   registers = panelRegisters(),
   extended = true,
   behave,
   delay = 0,
+  connectDelay = 0,
+  onStart,
 } = {}) {
   const panel = {
     holding: new Map(Object.entries(registers).map(([k, v]) => [Number(k), v])),
@@ -81,6 +84,9 @@ export function fakePanel({
     extended,
     behave,
     delay,
+    connectDelay,
+    /** Called after a start (register 0 = 1) is applied: a test may change what the panel keeps. */
+    onStart,
   };
 
   const later = (fn) => {
@@ -116,6 +122,10 @@ export function fakePanel({
       panel.holding.set(109, value === 1 ? 3 : 1);
       panel.holding.set(103, value === 1 ? 3 : 0);
       panel.holding.set(107, value === 1 ? (panel.holding.get(2) || 120) * 60 : 0);
+      panel.holding.set(106, value === 1 ? panel.holding.get(2) || 120 : 0);
+      if (value === 1) {
+        panel.onStart?.(panel);
+      }
     }
   };
 
@@ -144,7 +154,9 @@ export function fakePanel({
       return;
     }
     if (fn === 6) {
-      apply(address, request.value);
+      if (rule !== 'echo-only') {
+        apply(address, request.value);
+      }
       if (rule === 'silent-applied') {
         return;
       }
@@ -185,7 +197,10 @@ export function fakePanel({
       return true;
     };
     panel.sockets.push(socket);
-    setImmediate(() => {
+    const established = () => {
+      if (socket.destroyed) {
+        return;
+      }
       if (panel.down) {
         socket.emit(
           'error',
@@ -199,7 +214,12 @@ export function fakePanel({
         panel.maxOpen = Math.max(panel.maxOpen, panel.open);
         socket.emit('connect');
       }
-    });
+    };
+    if (panel.connectDelay > 0) {
+      setTimeout(established, panel.connectDelay);
+    } else {
+      setImmediate(established);
+    }
     return socket;
   };
 

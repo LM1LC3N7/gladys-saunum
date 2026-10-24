@@ -5,14 +5,16 @@
 //     read), so a restart never reads sooner than the interval;
 //   - the guard of a turn off that a start may have overtaken (a start sent
 //     without answer before it): the reads of the next 2 min send the turn
-//     off again if the sauna heats, even after a restart.
+//     off again if the sauna heats, even after a restart;
+//   - the session started from Gladys (its duration, the highest setpoint,
+//     its end): the reads keep checking it after a restart.
 // Nothing secret (the panel has no password). The file is readable by the
 // container user only (0600), bounded and repaired when read back (a
 // hand-edited or damaged file never stops the integration for good).
 // -----------------------------------------------------------------------------
 
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import { TIMINGS } from './constants.js';
+import { DURATION, MINUTE, TEMPERATURE, TIMINGS } from './constants.js';
 
 export const STATE_FILE = '/data/saunum-state.json';
 
@@ -59,14 +61,31 @@ export function memoryStore(initial = null) {
 const object = (value) =>
   value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
+/** The address key of a panel read back: bounded, without control characters. */
+const targetOf = (value) =>
+  // eslint-disable-next-line no-control-regex
+  typeof value === 'string' && value.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : undefined;
+const whole = (value, min, max) =>
+  Number.isInteger(value) && value >= min && value <= max ? value : undefined;
+
 /**
  * The persisted state, repaired and bounded (wall clock times):
- * `{ lastAttemptAt: number | null, stopGuard: { until, reasserts, target } | null }`
+ * `{ lastAttemptAt, stopGuard: { until, reasserts, target } | null,
+ *   launch: { target, duration, cap, verified, until } | null }`
  * (`target`: the address of the panel the guard belongs to).
  */
 export function normalizeMemory(raw, now) {
   const data = object(raw);
   const guard = object(data.stopGuard);
+  const launch = object(data.launch);
+  const launchOk =
+    Number.isFinite(launch.until) &&
+    launch.until > now &&
+    targetOf(launch.target) !== undefined &&
+    whole(launch.duration, DURATION.min, DURATION.max) !== undefined &&
+    whole(launch.cap, TEMPERATURE.min, TEMPERATURE.max) !== undefined;
   return {
     // A time in the future (a clock set back) counts as now: never a longer wait than the interval.
     lastAttemptAt:
@@ -74,12 +93,7 @@ export function normalizeMemory(raw, now) {
         ? Math.min(data.lastAttemptAt, now)
         : null,
     stopGuard:
-      Number.isFinite(guard.until) &&
-      guard.until > now &&
-      typeof guard.target === 'string' &&
-      guard.target.length <= 300 &&
-      // eslint-disable-next-line no-control-regex
-      !/[\u0000-\u001f\u007f]/.test(guard.target)
+      Number.isFinite(guard.until) && guard.until > now && targetOf(guard.target) !== undefined
         ? {
             target: guard.target,
             // Capped from now: an edited file or a clock jump never keeps it longer.
@@ -90,5 +104,15 @@ export function normalizeMemory(raw, now) {
                 : 0,
           }
         : null,
+    // Capped from now: never longer than the longest session plus its margin.
+    launch: launchOk
+      ? {
+          target: launch.target,
+          duration: launch.duration,
+          cap: launch.cap,
+          verified: launch.verified === true,
+          until: Math.min(launch.until, now + launch.duration * MINUTE + TIMINGS.remainingSlack),
+        }
+      : null,
   };
 }

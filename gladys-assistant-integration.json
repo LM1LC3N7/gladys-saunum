@@ -21,8 +21,8 @@
         "fr": "Votre sauna Saunum"
       },
       "description": {
-        "en": "Shows a Saunum Leil sauna in Gladys through the Modbus TCP of its control panel on your local network: session, state, temperature, humidity, door, heater elements, alarm, setpoint, time left, light. Turning off always works; heating from Gladys (turning on and the setpoint) is off until you allow it below, and is refused while the door is open or an alarm is on. Enter the address of the panel, save, then add the sauna from the Discovery tab. A sauna heats to a high temperature: never heat it from afar without making sure nobody is inside and nothing lies on the stove. Never tested with a real device. Not affiliated with Saunum.",
-        "fr": "Affiche un sauna Saunum Leil dans Gladys par le Modbus TCP de son panneau de commande sur votre réseau local : séance, état, température, humidité, porte, résistances, alarme, consigne, temps restant, lumière. L'extinction fonctionne toujours ; le chauffage depuis Gladys (allumage et consigne) reste désactivé tant que vous ne l'autorisez pas ci-dessous, et il est refusé porte ouverte ou alarme active. Saisissez l'adresse du panneau, enregistrez, puis ajoutez le sauna depuis l'onglet Découverte. Un sauna chauffe très fort : ne le lancez jamais à distance sans vous assurer que personne n'est dedans et que rien ne repose sur le poêle. Jamais testé avec un vrai appareil. Sans lien avec Saunum."
+        "en": "Shows a Saunum Leil sauna in Gladys through the Modbus TCP of its control panel on your local network: session, state, temperature, humidity, door, heater elements, alarm, setpoint, time left, light. Turning off does not depend on the option below; heating from Gladys (turning on and the setpoint) is off until you allow it, and is refused while the door is open or an alarm is on (the guide lists every refusal). A start from Gladys is checked on the next reads and turned off if the panel does not keep its setpoint and duration. Enter the address of the panel, save, then add the sauna from the Discovery tab. A sauna heats to a high temperature: never heat it from afar without making sure nobody is inside and nothing lies on the stove. Never tested with a real device. Not affiliated with Saunum.",
+        "fr": "Affiche un sauna Saunum Leil dans Gladys par le Modbus TCP de son panneau de commande sur votre réseau local : séance, état, température, humidité, porte, résistances, alarme, consigne, temps restant, lumière. L'extinction ne dépend pas de l'option ci-dessous ; le chauffage depuis Gladys (allumage et consigne) reste désactivé tant que vous ne l'autorisez pas, et il est refusé porte ouverte ou alarme active (le guide liste tous les refus). Un lancement depuis Gladys est vérifié par les lectures suivantes et éteint si le panneau ne garde pas sa consigne et sa durée. Saisissez l'adresse du panneau, enregistrez, puis ajoutez le sauna depuis l'onglet Découverte. Un sauna chauffe très fort : ne le lancez jamais à distance sans vous assurer que personne n'est dedans et que rien ne repose sur le poêle. Jamais testé avec un vrai appareil. Sans lien avec Saunum."
       },
       "links": [
         {
@@ -49,8 +49,8 @@
         "fr": "Adresse du panneau de commande"
       },
       "description": {
-        "en": "Its IPv4 address (best kept fixed in your router) or host name, optionally followed by \":port\" (502 by default). Modbus TCP must be on at the panel. The panel takes one Modbus connection at a time: no other Modbus client (Home Assistant…) should use it at the same time.",
-        "fr": "Son adresse IPv4 (à fixer de préférence dans votre box) ou son nom d'hôte, suivi éventuellement de « :port » (502 par défaut). Le Modbus TCP doit être activé sur le panneau. Le panneau n'accepte qu'une connexion Modbus à la fois : aucun autre client Modbus (Home Assistant…) ne doit l'utiliser en même temps."
+        "en": "Its IPv4 address (best kept fixed in your router) or host name, optionally followed by \":port\" (502 by default). Modbus TCP must be on at the panel. The panel may accept only one Modbus connection at a time: avoid using another Modbus client (Home Assistant…) at the same time.",
+        "fr": "Son adresse IPv4 (à fixer de préférence dans votre box) ou son nom d'hôte, suivi éventuellement de « :port » (502 par défaut). Le Modbus TCP doit être activé sur le panneau. Le panneau peut n'accepter qu'une connexion Modbus à la fois : évitez d'utiliser un autre client Modbus (Home Assistant…) en même temps."
       },
       "placeholder": {
         "en": "192.168.1.80",
@@ -83,8 +83,8 @@
         "fr": "Autoriser le chauffage depuis Gladys"
       },
       "description": {
-        "en": "Off by default. On: the \"Turn on (heat)\" button and the setpoint may start or change heating, only when a fresh read of the panel shows the door closed, no alarm and nothing blocking a start. Off: they refuse every request. Turning off always works.",
-        "fr": "Désactivé par défaut. Activé : le bouton « Allumer (chauffer) » et la consigne peuvent lancer ou modifier la chauffe, seulement si une lecture fraîche du panneau montre la porte fermée, aucune alarme et rien qui empêche le démarrage. Désactivé : ils refusent toute demande. L'extinction fonctionne toujours."
+        "en": "Off by default. On: the \"Turn on (heat)\" button and the setpoint may start or change heating, after a fresh read of the panel (refused while the door is open, an alarm is on, or the panel reports a reason not to start; the guide lists every refusal). Off: they refuse every request. Turning off does not depend on this option.",
+        "fr": "Désactivé par défaut. Activé : le bouton « Allumer (chauffer) » et la consigne peuvent lancer ou modifier la chauffe, après une lecture fraîche du panneau (refus porte ouverte, alarme active, ou quand le panneau signale une raison de ne pas démarrer ; le guide liste tous les refus). Désactivé : ils refusent toute demande. L'extinction ne dépend pas de cette option."
       },
       "required": false,
       "default": false
@@ -129,8 +129,8 @@
         "fr": "Durée de séance du bouton « Allumer » (min)"
       },
       "description": {
-        "en": "Written before each start from Gladys: the panel stops heating after it (60 min by default, 60 to 720).",
-        "fr": "Écrite avant chaque lancement depuis Gladys : le panneau arrête la chauffe après elle (60 min par défaut, de 60 à 720)."
+        "en": "Written before each start from Gladys: the panel stops heating after it (60 min by default, 60 to 720). If a read shows another duration while the session runs, Gladys turns the sauna off.",
+        "fr": "Écrite avant chaque lancement depuis Gladys : le panneau arrête la chauffe après elle (60 min par défaut, de 60 à 720). Si une lecture montre une autre durée pendant la séance, Gladys éteint le sauna."
       },
       "required": false,
       "default": 60,
@@ -145,8 +145,8 @@
         "fr": "Intervalle de rafraîchissement (s)"
       },
       "description": {
-        "en": "How often the panel is read, in seconds (never more often, even after a restart; a few seconds after each command too).",
-        "fr": "Fréquence de lecture du panneau, en secondes (jamais plus souvent, même après un redémarrage ; quelques secondes après chaque commande aussi)."
+        "en": "How often the panel is read, in seconds (not more often after a restart; read again a few seconds after each command, and every 10 s while a turn off or a start is being checked).",
+        "fr": "Fréquence de lecture du panneau, en secondes (pas plus souvent après un redémarrage ; relu quelques secondes après chaque commande, et toutes les 10 s pendant la vérification d'une extinction ou d'un lancement)."
       },
       "required": false,
       "default": 30,

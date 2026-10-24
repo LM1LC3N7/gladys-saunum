@@ -10,40 +10,50 @@
 //     button, a Discovery scan, a reconnection to Gladys, a configuration
 //     saved unchanged, nor a restart of the container (the time of the last
 //     read is kept in /data, written BEFORE the read, at most once a
-//     minute); a reconnection during a read reads nothing more;
+//     minute). Exceptions: the reads after a command (5 s, 20 s), and one
+//     read every 10 s while a turn off or a start from Gladys is still to be
+//     checked;
 //   - a read for an old configuration (generation) publishes nothing and
-//     sets no status; a read begun before a command left is not applied;
-//   - ONE Modbus connection at a time (src/modbus/client.js): a new address
-//     waits until the previous connection is closed.
+//     sets no status; a read begun before a command left is not applied; only
+//     the states of a read applied in this round are published (never a stale
+//     value after a failure);
+//   - ONE Modbus connection at a time (src/modbus/client.js).
 //
 // Commands:
 //   - TURN ON and the SETPOINT are sensitive: refused unless "Allow heating
 //     from Gladys" is on, checked on arrival and again right before each
-//     write; decided on a fresh read of the panel only (never on the state in
-//     memory); refused when a value they need is unknown, the door is open,
-//     an alarm is on, the panel reports a reason not to start, or a turn off
-//     is in flight or unconfirmed; the setpoint never above the "Highest
-//     setpoint" (90 °C by default, 100 °C at most), the session duration the
-//     one of the configuration (60 to 720 min); every write leaves within
-//     3.5 s of the click or the command is refused; one at a time, never
-//     retried;
-//   - TURN OFF protects: never held back by the option, a heating command, a
+//     write; decided on a fresh read of the panel only, which must carry the
+//     strict fingerprint of a Saunum panel; refusals listed in docs/en.md.
+//     A start is then CHECKED on the reads: setpoint not 0 and within the
+//     highest one, duration the one written (and register 106 / the time
+//     left on a newer firmware); otherwise, or when no read could check it
+//     within a minute, it is turned off with a warning in the status;
+//   - TURN OFF protects: not held back by the option, a heating command, a
 //     failed read or the first read after a restart (the device id is
 //     fixed); one write of register 0 = 0, no read before it, ahead of every
-//     queued read and command (it only waits for the request already on the
-//     wire); a heating write not sent yet gives way to it. When a start may
-//     still land after it (sent without answer), the reads of the next 2 min
-//     send it again if the sauna heats (3 times at most, kept in /data);
-//   - the LIGHT is a plain write (harmless), once the panel has been read;
+//     queued read and command; a read on the wire is cut for it; a heating
+//     write not sent yet gives way to it. Every turn off keeps a guard until
+//     a read shows the sauna off: a read showing it heating (with no start of
+//     ours after it) sends it again, 3 times at most, with a warning;
+//   - the LIGHT is a plain write, after a fresh read with the fingerprint;
 //   - the ack never waits for a publication to Gladys.
 // -----------------------------------------------------------------------------
 
 import { performance } from 'node:perf_hooks';
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
 import { normalizeConfig, targetKey, usable } from './config.js';
-import { FEATURES, PRESSED, REG, SECOND, STATE, TEMPERATURE, TIMINGS } from './constants.js';
+import {
+  FEATURES,
+  MINUTE,
+  PRESSED,
+  REG,
+  SECOND,
+  STATE,
+  TEMPERATURE,
+  TIMINGS,
+} from './constants.js';
 import { COMMAND_ROLES, buildDevice, panelIds, parseFeatureId, statesOf } from './devices.js';
-import { ERRORS, OUTCOME, STATE_NAMES, T, age, join, stateText, word } from './i18n.js';
+import { ERRORS, OUTCOME, STATE_NAMES, T, WARNINGS, age, join, stateText, word } from './i18n.js';
 import { ERROR_KINDS, ModbusClient, PRIORITY, errorReason } from './modbus/client.js';
 import { StatePublisher } from './publisher.js';
 import { coolingDown, heatingOn, parsePanel, readPanel } from './saunum.js';
@@ -52,6 +62,8 @@ import { fileStore, normalizeMemory } from './store.js';
 const freshPanel = () => ({
   /** The last state read (src/saunum.js parsePanel), else undefined. */
   data: undefined,
+  /** Whether `data` was applied since the last publication (never publish a stale value). */
+  fresh: false,
   /** When a polling or command read last succeeded (monotonic). */
   readAt: -Infinity,
   /** undefined: not read yet since the start; false: the last read failed. */
@@ -62,6 +74,8 @@ const freshPanel = () => ({
   timer: undefined,
   running: undefined,
   followUps: new Set(),
+  /** The read every 10 s while a guard or a start is to be checked. */
+  watch: undefined,
 });
 
 /** A refusal: its message is shown by Gladys. */
@@ -70,6 +84,11 @@ class Refusal extends Error {}
 /** Whether an error says the request never left (nothing written). */
 const notSent = (err) =>
   err?.kind === ERROR_KINDS.LATE || err?.kind === ERROR_KINDS.UNREACHABLE || err?.sent === false;
+
+/** Modbus exceptions 5 (acknowledge) and 6 (busy): passing. */
+const busy = (err) => err?.kind === ERROR_KINDS.EXCEPTION && (err.code === 5 || err.code === 6);
+
+const readReason = (err) => (err?.kind === 'invalid' ? 'invalid data' : errorReason(err));
 
 export class SaunumApp {
   constructor({
@@ -98,6 +117,11 @@ export class SaunumApp {
     this.clientKey = '';
     this.generation = 0;
     this.started = false;
+    /** The configuration is loaded (a turn off arriving before waits for it). */
+    this.ready = false;
+    this.readyWaiters = [];
+    this.configTimer = undefined;
+    this.configTries = 0;
     /** Whether the panel serves the registers 105-118 (undefined: not known yet). */
     this.extended = undefined;
     this.extendedRetryAt = -Infinity;
@@ -106,7 +130,8 @@ export class SaunumApp {
     this.lastStatus = undefined;
     this.published = undefined;
     this.badge = undefined;
-    this.dirty = false;
+    /** A warning kept in the status ({ en, fr }), until the next start or configuration. */
+    this.warning = undefined;
     /** Turn offs in flight, on any client (every heating command waits for them). */
     this.stopsInFlight = 0;
     this.resetGuards();
@@ -128,9 +153,68 @@ export class SaunumApp {
     this.stopGuard = undefined;
     /** When the last turn off left. */
     this.lastStopAt = -Infinity;
+    /** The session started from Gladys, checked on the reads. */
+    this.launch = undefined;
   }
 
   // --- Lifecycle -------------------------------------------------------------
+
+  /**
+   * Gladys connected: the configuration is loaded (tried again 5, 15, 30,
+   * then every 60 s when Gladys does not give it), then `connected`.
+   */
+  async onConnected(load) {
+    if (this.configTimer) {
+      this.timers.clearTimeout(this.configTimer);
+      this.configTimer = undefined;
+    }
+    let raw;
+    try {
+      raw = await load();
+    } catch (err) {
+      const wait = TIMINGS.configRetry[Math.min(this.configTries, TIMINGS.configRetry.length - 1)];
+      this.configTries += 1;
+      this.logger.warn(`Saunum: loading the configuration failed (${err?.message ?? 'error'})`);
+      if (!this.ready) {
+        await this.setStatus(false, T.configRetry(age(wait)));
+      }
+      this.configTimer = this.timers.setTimeout(() => {
+        this.configTimer = undefined;
+        this.onConnected(load).catch(() => {});
+      }, wait);
+      return;
+    }
+    this.configTries = 0;
+    await this.connected(raw);
+  }
+
+  /** Resolves once the configuration is loaded, or at `by` (monotonic). */
+  waitReady(by) {
+    if (this.ready) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const timer = this.timers.setTimeout(
+        () => {
+          this.readyWaiters = this.readyWaiters.filter((w) => w !== waiter);
+          resolve(false);
+        },
+        Math.max(0, by - this.mono()),
+      );
+      const waiter = () => {
+        this.timers.clearTimeout(timer);
+        resolve(true);
+      };
+      this.readyWaiters.push(waiter);
+    });
+  }
+
+  markReady() {
+    this.ready = true;
+    for (const waiter of this.readyWaiters.splice(0)) {
+      waiter();
+    }
+  }
 
   /**
    * `fresh`: started for a new address while running (a read may go at
@@ -139,8 +223,6 @@ export class SaunumApp {
    */
   async start(raw = {}, { fresh = false } = {}) {
     this.stop();
-    await this.panel.running;
-    const generation = this.generation;
     const previousKey = targetKey(this.config);
     this.config = normalizeConfig(raw);
     const key = targetKey(this.config);
@@ -149,6 +231,12 @@ export class SaunumApp {
       this.extended = undefined;
       this.extendedRetryAt = -Infinity;
     }
+    this.warning = undefined;
+    // The new client at once: a turn off arriving from now on goes to the new address.
+    this.useClient(key);
+    this.markReady();
+    await this.panel.running;
+    const generation = this.generation;
     this.memory = normalizeMemory(await this.store.load().catch(() => null), this.now());
     if (generation !== this.generation) {
       return;
@@ -160,7 +248,7 @@ export class SaunumApp {
       this.lastAttemptAt = Math.max(this.lastAttemptAt, this.mono() - ago);
     }
     this.restoreStopGuard(key);
-    this.useClient(key);
+    this.restoreLaunch(key);
     this.panel = freshPanel();
     this.published = undefined;
     this.badge = undefined;
@@ -175,6 +263,7 @@ export class SaunumApp {
     if (generation !== this.generation) {
       return;
     }
+    this.ensureWatch();
     const wait = fresh ? 0 : this.firstWait();
     if (wait > 0) {
       this.schedule(wait);
@@ -222,6 +311,22 @@ export class SaunumApp {
     };
   }
 
+  /** The session started from Gladys kept in /data, for this panel only. */
+  restoreLaunch(key) {
+    const kept = this.memory.launch;
+    if (!kept || kept.target !== key || this.launch) {
+      return;
+    }
+    this.launch = {
+      target: key,
+      duration: kept.duration,
+      cap: kept.cap,
+      verified: kept.verified,
+      deadline: this.mono() + TIMINGS.launchVerifyBy,
+      until: this.mono() + Math.max(0, kept.until - this.now()),
+    };
+  }
+
   /** The wait before the first read after a container start, from the time kept in /data. */
   firstWait() {
     return Math.min(this.interval, Math.max(0, this.due - this.mono()));
@@ -234,12 +339,19 @@ export class SaunumApp {
       this.timers.clearTimeout(handle);
     }
     this.panel.followUps.clear();
+    if (this.panel.watch) {
+      this.timers.clearTimeout(this.panel.watch);
+      this.panel.watch = undefined;
+    }
     this.publisher.stop();
   }
 
   /** The container stops: the timers, then the connection (a queued turn off still goes). */
   async shutdown() {
     this.stop();
+    if (this.configTimer) {
+      this.timers.clearTimeout(this.configTimer);
+    }
     await this.client?.close();
   }
 
@@ -255,14 +367,16 @@ export class SaunumApp {
     const next = normalizeConfig(raw);
     return (
       targetKey(next) !== targetKey(this.config) ||
-      next.invalidAddress !== this.config.invalidAddress
+      next.invalidAddress !== this.config.invalidAddress ||
+      (next.address !== undefined && next.unitId === undefined) !==
+        (this.config.address !== undefined && this.config.unitId === undefined)
     );
   }
 
   /**
    * Connected to Gladys. The first time, start; after a reconnection, resend
-   * what Gladys keeps in memory only (status, Discovery list, badge) and the
-   * last states, without reading the panel.
+   * what Gladys keeps in memory only (status, Discovery list, badge), without
+   * reading the panel.
    */
   async connected(raw = {}) {
     if (!this.started) {
@@ -316,10 +430,16 @@ export class SaunumApp {
   }
 
   async saveMemory() {
-    this.dirty = false;
     await this.store
       .save(this.memory)
       .catch((err) => this.logger.warn(`Saving the state to /data failed: ${err.message}`));
+  }
+
+  /** A warning: in the logs, and kept in the status. */
+  warn(text) {
+    this.warning = text;
+    this.logger.warn(`Saunum: ${text.en}`);
+    this.updateStatus().catch(() => {});
   }
 
   // --- Polling ---------------------------------------------------------------
@@ -362,6 +482,41 @@ export class SaunumApp {
     return p.running;
   }
 
+  /** Whether reads are needed sooner than the interval: a guard, or a start to verify. */
+  get watching() {
+    return this.stopGuardActive() || Boolean(this.launch && !this.launch.verified);
+  }
+
+  /**
+   * One read every 10 s while a turn off or a start from Gladys is to be
+   * checked (also after a restart, from /data); a start not verified by its
+   * deadline is turned off.
+   */
+  ensureWatch() {
+    const p = this.panel;
+    if (p.watch || !usable(this.config) || !this.watching) {
+      return;
+    }
+    const generation = this.generation;
+    p.watch = this.timers.setTimeout(() => {
+      p.watch = undefined;
+      if (generation !== this.generation) {
+        return;
+      }
+      if (this.launch && !this.launch.verified && this.mono() >= this.launch.deadline) {
+        this.launchFailed(WARNINGS.launchUnverified);
+      }
+      Promise.resolve(p.running)
+        .then(() => this.tick())
+        .catch(() => this.logger.error('Saunum refresh failed'))
+        .finally(() => {
+          if (generation === this.generation) {
+            this.ensureWatch();
+          }
+        });
+    }, TIMINGS.watchEvery);
+  }
+
   /** Keeps the time of this read; when the write of the minute is due, in /data BEFORE the read. */
   async noteAttempt() {
     this.lastAttemptAt = this.mono();
@@ -378,19 +533,29 @@ export class SaunumApp {
     return this.extended !== false || this.mono() >= this.extendedRetryAt;
   }
 
-  /** The words of a read, with what the panel said about the registers 105-118. */
+  /**
+   * The state of a read. A panel seen serving the registers 105-118 that
+   * refuses them is never downgraded: the read is marked `downgraded`
+   * (heating and light refused), the block is asked again next time.
+   */
   async readWords(options) {
     const result = await readPanel(this.client, { extended: this.wantExtended(), ...options });
+    const data = parsePanel(result.words);
     if (result.refusedExtended) {
-      if (this.extended !== false) {
-        this.logger.info('Saunum: registers 105-118 not served (older firmware)');
+      if (this.extended === true) {
+        data.downgraded = true;
+        this.logger.warn('Saunum: the panel no longer serves registers 105-118');
+      } else {
+        if (this.extended !== false) {
+          this.logger.info('Saunum: registers 105-118 not served (older firmware)');
+        }
+        this.extended = false;
+        this.extendedRetryAt = this.mono() + TIMINGS.extendedRetry;
       }
-      this.extended = false;
-      this.extendedRetryAt = this.mono() + TIMINGS.extendedRetry;
-    } else if (result.words.status.length > 5) {
+    } else if (data.extended) {
       this.extended = true;
     }
-    return parsePanel(result.words);
+    return data;
   }
 
   async run() {
@@ -421,22 +586,22 @@ export class SaunumApp {
       if (generation !== this.generation) {
         return;
       }
-      delay = this.failed(err);
-    }
-    if (this.dirty) {
-      await this.saveMemory();
-      if (generation !== this.generation) {
-        return;
+      if (err?.preempted) {
+        // Cut for a turn off: not a failure (the reads after it follow).
+        this.logger.debug('Saunum: read cut for a turn off');
+      } else {
+        delay = this.failed(err);
       }
     }
     await this.publishAll();
     if (generation === this.generation) {
       this.schedule(delay);
+      this.ensureWatch();
     }
   }
 
   /** A read of the panel (polling, or the fresh read of a command). */
-  applyRead(data, { fromCommand = false } = {}) {
+  applyRead(data) {
     const p = this.panel;
     p.online = true;
     p.failures = 0;
@@ -444,13 +609,14 @@ export class SaunumApp {
     p.error = undefined;
     p.readAt = this.mono();
     p.data = data;
-    this.observe(data, { fromCommand });
+    p.fresh = true;
+    this.observe(data);
   }
 
   /** A failed read: the delay before the next one. */
   failed(err) {
     const p = this.panel;
-    const reason = err?.kind === 'invalid' ? 'invalid data' : errorReason(err);
+    const reason = readReason(err);
     const wait = Math.max(
       this.interval,
       TIMINGS.backoff[Math.min(p.failures, TIMINGS.backoff.length - 1)],
@@ -465,6 +631,11 @@ export class SaunumApp {
 
   /** `[connected, message]` of the configuration screen. */
   status() {
+    const [connected, message] = this.baseStatus();
+    return [connected, this.warning && message ? join(this.warning, message) : message];
+  }
+
+  baseStatus() {
     const p = this.panel;
     const c = this.config;
     if (!c.address) {
@@ -509,7 +680,11 @@ export class SaunumApp {
     if (generation !== this.generation) {
       return;
     }
-    this.queueStates();
+    // Only a read applied since the last publication: never a stale value.
+    if (this.panel.fresh) {
+      this.panel.fresh = false;
+      this.queueStates();
+    }
     await this.flush();
     if (generation !== this.generation) {
       return;
@@ -595,14 +770,16 @@ export class SaunumApp {
     }
   }
 
-  /** A device was created (or updated): send its last values at once. */
+  /** A device was created (or updated): send its last values at once (the panel is online). */
   async deviceCreated(device) {
     this.badge = undefined;
     const created = this.createdFeatures();
     for (const f of device?.features ?? []) {
       created.add(f.external_id);
     }
-    this.queueStates(created);
+    if (this.panel.online === true) {
+      this.queueStates(created);
+    }
     await this.flush();
     await this.publishBadge();
   }
@@ -668,6 +845,17 @@ export class SaunumApp {
     return Number.isInteger(n) ? n : undefined;
   }
 
+  /** Why the configuration cannot reach a panel, else undefined. */
+  configProblem() {
+    if (!this.config.address) {
+      return this.config.invalidAddress ? ERRORS.badAddress : ERRORS.noConfig;
+    }
+    if (this.config.unitId === undefined) {
+      return ERRORS.badUnit;
+    }
+    return this.client ? undefined : ERRORS.noConfig;
+  }
+
   async setValue(_device, feature, value) {
     // The deadlines count from the arrival of the command, before any wait.
     const received = this.mono();
@@ -678,8 +866,13 @@ export class SaunumApp {
     if (panelIds(this.gladys).feature(role) !== feature.external_id) {
       throw this.refusal(ERRORS.unknownDevice, OUTCOME.nothing);
     }
-    if (!usable(this.config) || !this.client) {
-      throw this.refusal(ERRORS.noConfig, OUTCOME.nothing);
+    // Arrived before the configuration is loaded: waits for it, within its deadline.
+    if (!(await this.waitReady(received + TIMINGS.commandSendBy))) {
+      throw this.refusal(ERRORS.notLoaded, OUTCOME.nothing);
+    }
+    const problem = this.configProblem();
+    if (problem) {
+      throw this.refusal(problem, OUTCOME.nothing);
     }
     if (role === FEATURES.TARGET) {
       const temperature = SaunumApp.setpointOf(value);
@@ -761,8 +954,23 @@ export class SaunumApp {
     }
   }
 
+  /** The identity of a fresh read before any write but a turn off: a refusal text, else undefined. */
+  identityProblem(data) {
+    if (!data.fingerprint) {
+      return ERRORS.foreign;
+    }
+    if (data.downgraded) {
+      return ERRORS.identityChanged;
+    }
+    return undefined;
+  }
+
   /** What the fresh read says about a heating command: a refusal text, 'nothing', or undefined (go). */
   decideHeat(data, order) {
+    const identity = this.identityProblem(data);
+    if (identity) {
+      return identity;
+    }
     if (data.alarm !== false) {
       return data.alarm === undefined ? ERRORS.missing : ERRORS.alarm;
     }
@@ -770,7 +978,15 @@ export class SaunumApp {
       if (data.target === undefined) {
         return ERRORS.missing;
       }
-      if (data.sessionActive) {
+      if (data.state !== undefined) {
+        // Register 109 served: it decides, whatever register 0 says.
+        if (data.state === STATE.COOLDOWN) {
+          return ERRORS.coolingDown;
+        }
+        if (data.state !== STATE.STANDBY && data.doorOpen) {
+          return ERRORS.doorOpen;
+        }
+      } else if (data.sessionActive) {
         if (coolingDown(data)) {
           return ERRORS.coolingDown;
         }
@@ -805,9 +1021,11 @@ export class SaunumApp {
     return undefined;
   }
 
-  async sendHeat(received, generation, entry, order) {
-    const sendBy = received + TIMINGS.commandSendBy;
-    const answerBy = received + TIMINGS.commandAnswerBy;
+  /**
+   * The fresh read of a command: COMMAND priority, every request leaving by
+   * `sendBy`. Returns the state and the mean time of one request.
+   */
+  async freshRead(sendBy, entry) {
     const readStart = this.mono();
     let data;
     try {
@@ -817,19 +1035,30 @@ export class SaunumApp {
         answerBy: sendBy,
       });
     } catch (err) {
+      if (entry && entry.seq !== this.protectSeq) {
+        throw this.refusal(ERRORS.stopMeanwhile, OUTCOME.nothing);
+      }
       if (err?.kind === ERROR_KINDS.LATE) {
         throw this.refusal(ERRORS.tooSlow, OUTCOME.nothing);
       }
-      const reason = err?.kind === 'invalid' ? 'invalid data' : errorReason(err);
-      throw this.refusal(ERRORS.unknownState(reason), OUTCOME.nothing);
+      throw this.refusal(ERRORS.unknownState(readReason(err)), OUTCOME.nothing);
     }
-    if (generation !== this.generation) {
-      throw this.refusal(ERRORS.unknownDevice, OUTCOME.nothing);
-    }
+    const requests = data.extended || data.downgraded ? 3 : 4;
+    const perRequest = (this.mono() - readStart) / requests;
     if (readStart > this.lastSentAt) {
-      this.applyRead(data, { fromCommand: true });
+      this.applyRead(data);
       // Shown in the background: the ack never waits for Gladys.
       this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
+    }
+    return { data, perRequest };
+  }
+
+  async sendHeat(received, generation, entry, order) {
+    const sendBy = received + TIMINGS.commandSendBy;
+    const answerBy = received + TIMINGS.commandAnswerBy;
+    const { data, perRequest } = await this.freshRead(sendBy, entry);
+    if (generation !== this.generation) {
+      throw this.refusal(ERRORS.unknownDevice, OUTCOME.nothing);
     }
     // Decided on the fresh read only, never on the state in memory.
     const decision = this.decideHeat(data, order);
@@ -858,8 +1087,21 @@ export class SaunumApp {
             : [[REG.SAUNA_DURATION, this.config.sessionDuration]]),
           [REG.SESSION_ACTIVE, 1],
         ];
+    // The last write would leave too late (a slow panel): refused before the first one.
+    const lastLeaves =
+      this.mono() +
+      writes.length * TIMINGS.requestSpacing +
+      (writes.length - 1) * Math.max(0, perRequest);
+    if (lastLeaves > sendBy) {
+      throw this.refusal(ERRORS.tooSlow, OUTCOME.nothing);
+    }
     let wrote = 0;
     const outcome = () => (order.setpoint || wrote === 0 ? OUTCOME.nothing : OUTCOME.notStarted);
+    const launch = {
+      target: targetKey(this.config),
+      duration: this.config.sessionDuration,
+      cap: this.config.maxTemperature,
+    };
     for (const [address, value] of writes) {
       const last = address === REG.SESSION_ACTIVE;
       // The checks again right before the first byte of each write.
@@ -877,6 +1119,8 @@ export class SaunumApp {
         if (last) {
           this.lastStartAt = this.mono();
           entry.sentAt = this.mono();
+          // Checked on the reads from the moment it may land.
+          this.watchLaunch(launch);
           this.logger.info(
             `Saunum: start at ${this.config.startTemperature} °C for ${this.config.sessionDuration} min`,
           );
@@ -901,6 +1145,9 @@ export class SaunumApp {
         this.logger.warn(`Saunum: heating command failed (${reason})`);
         this.followUp();
         if (notSent(err)) {
+          if (last) {
+            this.dropLaunch();
+          }
           throw this.refusal(
             err.kind === ERROR_KINDS.LATE ? ERRORS.tooSlow : ERRORS.notSent(reason),
             outcome(),
@@ -916,10 +1163,112 @@ export class SaunumApp {
         throw this.refusal(ERRORS.sentUnconfirmed(reason));
       }
     }
-    // Every write echoed by the panel: the reads that follow show the result.
+    if (!order.setpoint) {
+      // A new start from Gladys: the warning of an older one goes.
+      this.warning = undefined;
+    }
+    // Every write echoed by the panel: the reads that follow check the result.
     this.followUp();
     return undefined;
   }
+
+  // --- The session started from Gladys ----------------------------------------
+
+  /** A start may land: from now on, every read checks its values (kept in /data). */
+  watchLaunch({ target, duration, cap }) {
+    const now = this.mono();
+    this.launch = {
+      target,
+      duration,
+      cap,
+      verified: false,
+      deadline: now + TIMINGS.launchVerifyBy,
+      until: now + duration * MINUTE + TIMINGS.remainingSlack,
+    };
+    this.persistLaunch();
+    this.ensureWatch();
+  }
+
+  dropLaunch() {
+    if (this.launch) {
+      this.launch = undefined;
+      this.persistLaunch();
+    }
+  }
+
+  persistLaunch() {
+    const l = this.launch;
+    this.memory.launch = l
+      ? {
+          target: l.target,
+          duration: l.duration,
+          cap: l.cap,
+          verified: l.verified,
+          until: this.now() + Math.max(0, l.until - this.mono()),
+        }
+      : null;
+    this.saveMemory().catch(() => {});
+  }
+
+  /**
+   * A read while a session started from Gladys may run: the setpoint must be
+   * set (not 0) and within the highest setpoint, the duration the one
+   * written (register 106 too, and the time left within it, on a newer
+   * firmware). Otherwise the sauna is turned off, with a warning.
+   */
+  checkLaunch(data) {
+    const l = this.launch;
+    if (!l) {
+      return;
+    }
+    if (l.target !== targetKey(this.config) || this.mono() >= l.until) {
+      this.dropLaunch();
+      return;
+    }
+    if (!data.sessionActive || coolingDown(data)) {
+      if (l.verified) {
+        // The session is over.
+        this.dropLaunch();
+      }
+      return;
+    }
+    let problem;
+    if (data.target === undefined || data.target === 0 || data.target > l.cap) {
+      problem = WARNINGS.reasons.setpoint;
+    } else if (
+      data.duration !== l.duration ||
+      (data.activeDuration !== undefined &&
+        data.activeDuration !== 0 &&
+        data.activeDuration !== l.duration) ||
+      (data.remainingSeconds !== undefined &&
+        data.remainingSeconds > l.duration * 60 + TIMINGS.remainingSlack / SECOND)
+    ) {
+      problem = WARNINGS.reasons.duration;
+    }
+    if (problem) {
+      this.launchFailed(WARNINGS.launchMismatch(problem));
+      return;
+    }
+    if (!l.verified) {
+      l.verified = true;
+      this.persistLaunch();
+    }
+  }
+
+  /** The session started from Gladys is not as asked, or could not be checked: turned off. */
+  launchFailed(warning) {
+    this.dropLaunch();
+    this.warn(warning);
+    if (!this.client) {
+      return;
+    }
+    this.protectSeq += 1;
+    const sentAt = this.mono();
+    this.guardStop(sentAt);
+    this.sendStop({ background: true }).catch(() => {});
+  }
+
+  // --- Turn off ---------------------------------------------------------------
 
   /** A start may still land: in flight (sent, not answered), or sent without answer. */
   get startMayLand() {
@@ -937,14 +1286,16 @@ export class SaunumApp {
   }
 
   /**
-   * Sets (or keeps) the guard of a turn off sent at `sentAt`. `sticky`: a
-   * start may land after it; lifted by time only, kept in /data.
+   * Sets (or keeps) the guard of a turn off sent at `sentAt`: lifted by a
+   * read showing the sauna off (nothing in flight). `sticky`: a start may
+   * land after it; lifted by time only (2 min), kept in /data.
    */
   guardStop(sentAt, { sticky = false } = {}) {
     const key = targetKey(this.config);
     if (this.stopGuardActive() && this.stopGuard.target === key) {
       this.stopGuard.sticky ||= sticky;
       this.stopGuard.sentAt = Math.max(this.stopGuard.sentAt, sentAt);
+      this.stopGuard.until = Math.max(this.stopGuard.until, this.mono() + TIMINGS.guard);
     } else {
       this.stopGuard = {
         sentAt,
@@ -957,6 +1308,7 @@ export class SaunumApp {
     if (this.stopGuard.sticky) {
       this.persistStopGuard();
     }
+    this.ensureWatch();
   }
 
   persistStopGuard() {
@@ -971,50 +1323,64 @@ export class SaunumApp {
     this.saveMemory().catch(() => {});
   }
 
-  /** One write of register 0 = 0, ahead of every queued read and command. */
-  sendStop({ background = false } = {}) {
+  /**
+   * One write of register 0 = 0, ahead of every queued read and command; a
+   * read on the wire is cut for it. `track.left` says whether it left.
+   * A busy panel (exception 5 or 6) gets one more try.
+   */
+  sendStop({ background = false, track = {}, retries = TIMINGS.busyRetry } = {}) {
     this.stopsInFlight += 1;
     const sentAt = this.mono();
     this.lastSentAt = sentAt;
     this.lastStopAt = sentAt;
-    const sending = this.client.writeRegister(REG.SESSION_ACTIVE, 0, {
+    const client = this.client;
+    const sending = client.writeRegister(REG.SESSION_ACTIVE, 0, {
       priority: PRIORITY.PROTECT,
       answerBy: sentAt + TIMINGS.protectTimeout,
       beforeSend: () => {
         // Counted from the moment it leaves: a read begun before it is not applied.
         this.lastSentAt = this.mono();
+        track.left = true;
       },
     });
-    sending
+    client.preemptRead();
+    const done = sending.then(
+      () => undefined,
+      (err) => {
+        if (busy(err) && retries > 0 && this.client === client) {
+          this.logger.warn('Saunum: turn off refused, panel busy: tried once more');
+          track.retried = true;
+          this.sendStop({ background: true, retries: retries - 1 }).catch(() => {});
+        }
+        throw err;
+      },
+    );
+    done
       .finally(() => {
         this.stopsInFlight -= 1;
       })
       .catch(() => {});
     if (background) {
-      sending
+      done
         .then(() => this.followUp())
         .catch((err) => this.logger.warn(`Saunum: turn off again failed (${errorReason(err)})`));
     }
-    return sending;
+    return done;
   }
 
   /**
-   * TURN OFF: never held back, one write, no read before it (it decides
-   * nothing: it is always sent, never answered "already off"). Confirmed by
-   * the echo of the panel; when it may have left without that, or a start
-   * may land after it, a guard: the reads of the next 2 min send it again if
-   * the sauna heats.
+   * TURN OFF: one write, no read before it (it decides nothing: it is always
+   * sent, never answered "already off"). Accepted on the echo of the panel,
+   * then verified by the reads (the guard).
    */
   async turnOff(received) {
     // A heating write not sent yet gives way.
     this.protectSeq += 1;
-    const generation = this.generation;
     const sentAt = this.mono();
-    if (this.startMayLand) {
-      this.guardStop(sentAt, { sticky: true });
-    }
+    this.guardStop(sentAt, { sticky: this.startMayLand });
     this.logger.info('Saunum: turn off');
-    const sending = this.sendStop();
+    const track = { left: false, retried: false };
+    const sending = this.sendStop({ track });
     const answerIn = Math.max(0, received + TIMINGS.commandAnswerBy - this.mono());
     let late;
     const result = await new Promise((resolve) => {
@@ -1028,12 +1394,12 @@ export class SaunumApp {
     this.followUp();
     if (result.late) {
       // Still going after the ack (bounded by its own deadline): logged when it ends.
-      if (generation === this.generation) {
-        this.guardStop(sentAt);
-      }
       sending.catch((err) =>
         this.logger.warn(`Saunum: turn off failed after the ack (${errorReason(err)})`),
       );
+      if (!track.left) {
+        throw this.refusal(ERRORS.notYetSent);
+      }
       throw this.refusal(ERRORS.sentUnconfirmed(ERRORS.noAnswerYet[this.lang]));
     }
     if (result.err) {
@@ -1041,15 +1407,15 @@ export class SaunumApp {
       const reason = errorReason(err);
       this.logger.warn(`Saunum: turn off failed (${reason})`);
       if (notSent(err)) {
-        throw this.refusal(ERRORS.notSent(reason));
+        throw this.refusal(ERRORS.notSent(reason), ERRORS.checkSauna);
       }
       if (err.kind === ERROR_KINDS.EXCEPTION) {
-        throw this.refusal(ERRORS.refused(reason));
+        throw this.refusal(
+          ERRORS.refused(reason),
+          track.retried ? ERRORS.busyRetried : ERRORS.checkSauna,
+        );
       }
-      // Sent, no clean answer: it may have reached the panel.
-      if (generation === this.generation) {
-        this.guardStop(sentAt);
-      }
+      // Sent, no clean answer: it may have reached the panel (the guard checks it).
       throw this.refusal(ERRORS.sentUnconfirmed(reason));
     }
     return undefined;
@@ -1057,14 +1423,16 @@ export class SaunumApp {
 
   /**
    * A read through the guards: a start sent without answer is seen landed
-   * (heating); a turn off is confirmed (off, nothing in flight, not sticky),
-   * or sent again if the sauna heats while a start may have landed after it.
+   * (heating); the session started from Gladys is checked; a turn off is
+   * verified (off, nothing in flight, not sticky), or sent again if the
+   * sauna heats while no start of ours went after it.
    */
-  observe(data, { fromCommand = false } = {}) {
+  observe(data) {
     if (heatingOn(data) && this.mono() < this.unconfirmedStartUntil) {
       // The start landed: it cannot land any more.
       this.unconfirmedStartUntil = -Infinity;
     }
+    this.checkLaunch(data);
     if (!this.stopGuardActive()) {
       return;
     }
@@ -1075,14 +1443,13 @@ export class SaunumApp {
     }
     if (!heatingOn(data)) {
       if (!guard.sticky && this.stopsInFlight === 0 && !this.startMayLand) {
-        // Off, and nothing may land any more: the turn off is confirmed.
+        // Off, and nothing may land any more: the turn off is verified.
         this.stopGuard = undefined;
       }
       return;
     }
     const startInFlight = this.startEntry?.sentAt !== undefined && !this.startEntry.answered;
     if (
-      !fromCommand &&
       this.lastStartAt <= guard.sentAt &&
       !startInFlight &&
       this.stopsInFlight === 0 &&
@@ -1092,17 +1459,25 @@ export class SaunumApp {
       if (guard.sticky) {
         this.persistStopGuard();
       }
-      this.logger.warn('Saunum: the sauna heats again after a turn off, turn off sent again');
+      this.warn(WARNINGS.stopNoEffect);
       this.sendStop({ background: true }).catch(() => {});
     }
   }
 
-  /** The light: a plain write, once the panel has been read. */
+  // --- Light ------------------------------------------------------------------
+
+  /** The light: a write after a fresh read showing a Saunum panel. */
   async setLight(received, on) {
-    if (this.panel.online !== true) {
-      throw this.refusal(ERRORS.notRead, OUTCOME.nothing);
-    }
     const sendBy = received + TIMINGS.commandSendBy;
+    const generation = this.generation;
+    const { data } = await this.freshRead(sendBy);
+    if (generation !== this.generation) {
+      throw this.refusal(ERRORS.unknownDevice, OUTCOME.nothing);
+    }
+    const identity = this.identityProblem(data);
+    if (identity) {
+      throw this.refusal(identity, OUTCOME.nothing);
+    }
     try {
       await this.client.writeRegister(REG.LIGHT, on, {
         priority: PRIORITY.COMMAND,

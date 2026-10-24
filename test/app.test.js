@@ -6,74 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEVICE_TRANSPORTS } from '@gladysassistant/integration-sdk';
-import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
-import { SaunumApp } from '../src/app.js';
 import { MINUTE, SECOND } from '../src/constants.js';
-import { registerHandlers } from '../src/handlers.js';
 import { memoryStore } from '../src/store.js';
-import { HOST, NOW, fakePanel, settle } from './fixtures/fakePanel.js';
-
-const CFG = { address: HOST };
-const HEAT_CFG = { ...CFG, allow_heating: true };
-const DEVICE = 'ext:test-integration:saunum:panel';
-const feature = (role) => `${DEVICE}:${role}`;
-
-/** The ack of a command: { ok: true } or { error }. */
-const outcome = (ack) => (ack.success ? { ok: true } : { error: String(ack.error) });
-
-async function setup(
-  t,
-  { config = CFG, panel = fakePanel(), store = memoryStore(), create = true, now = NOW } = {},
-) {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now });
-  const gladys = createFakeGladys({ config });
-  const logs = [];
-  const logger = Object.fromEntries(
-    ['debug', 'info', 'warn', 'error'].map((l) => [
-      l,
-      (...a) => logs.push(`${l}: ${a.map((x) => (x instanceof Error ? x.message : x)).join(' ')}`),
-    ]),
-  );
-  const app = new SaunumApp({
-    gladys,
-    logger,
-    connect: panel.connect,
-    now: () => Date.now(),
-    mono: () => Date.now(),
-    store,
-  });
-  registerHandlers(gladys, app, logger);
-  const advance = async (ms, step = 50) => {
-    for (let e = 0; e < ms; e += step) {
-      t.mock.timers.tick(Math.min(step, ms - e));
-      await settle(5);
-    }
-  };
-  const connecting = gladys.connect();
-  await settle();
-  await advance(3 * SECOND);
-  await connecting;
-  t.after(() => app.stop());
-  if (create && gladys.fake.discoveredDevices.length > 0) {
-    await gladys.fake.deviceCreated(gladys.fake.discoveredDevices[0]);
-    await settle();
-  }
-  const fire = (role, value = 1) => {
-    const device = gladys.fake.devices.find((d) => d.external_id === DEVICE) ?? {
-      external_id: DEVICE,
-    };
-    return gladys.fake.setValue(device, { external_id: feature(role) }, value);
-  };
-  /** Presses and lets the clock run: the ack ({ ok } or { error }). */
-  const press = async (role, value = 1, wait = 5 * SECOND) => {
-    const ack = fire(role, value).then(outcome);
-    await advance(wait);
-    return ack;
-  };
-  const state = (role) =>
-    gladys.fake.states.findLast((s) => s.device_feature_external_id === feature(role));
-  return { gladys, app, panel, advance, logs, fire, press, store, state };
-}
+import { HOST, NOW, fakePanel } from './fixtures/fakePanel.js';
+import { DEVICE, HEAT_CFG, feature, outcome, setup } from './fixtures/harness.js';
 
 test('discovery: one device, the extended features, its states once created', async (t) => {
   const { gladys, state, panel } = await setup(t);
@@ -184,7 +120,7 @@ test('turn on refused when the door is open, when an alarm is on, or a start is 
   panel.set(202, 1);
   assert.match((await press('heat-on')).error, /alarme est active/);
   panel.set(202, 2);
-  assert.match((await press('heat-on')).error, /incomplet/);
+  assert.match((await press('heat-on')).error, /ne ressemble pas à un panneau Saunum/);
   panel.set(202, 0);
   panel.set(118, 0x40);
   assert.match((await press('heat-on')).error, /0x40/);
@@ -200,18 +136,29 @@ test('the setpoint: bounded by the highest one, written alone', async (t) => {
   assert.deepEqual(panel.writes(), [[4, 75]]);
 });
 
-test('turn off: never held back (option off), one write ahead of the queued reads', async (t) => {
-  const panel = fakePanel({ delay: 200 });
+test('turn off: not held back by the option, ahead of the queued reads, cuts a read on the wire', async (t) => {
+  const panel = fakePanel();
   const { app, fire, advance, press } = await setup(t, { panel });
   panel.set(0, 1);
+  await advance(2 * SECOND);
   panel.requests.length = 0;
-  // A read starts; the turn off arrives while its first request is on the wire.
+  // A read starts and gets no answer: the turn off cuts it instead of waiting.
+  panel.behave = (r) => (r.fn === 3 ? 'silent' : undefined);
   const reading = app.tick();
   await advance(100);
-  const ack = fire('heat-off').then(outcome);
-  await advance(5 * SECOND);
+  assert.equal(panel.requests.length, 1);
+  const firedAt = Date.now();
+  let ackedAt;
+  const ack = fire('heat-off').then((a) => {
+    ackedAt = Date.now();
+    return outcome(a);
+  });
+  await advance(2 * SECOND);
+  panel.behave = undefined;
+  await advance(3 * SECOND);
   await reading;
   assert.deepEqual(await ack, { ok: true });
+  assert.ok(ackedAt - firedAt < 1000, `acked after ${ackedAt - firedAt} ms`);
   assert.deepEqual(
     panel.requests.slice(0, 2).map((r) => [r.fn, r.address]),
     [

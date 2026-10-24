@@ -3,8 +3,10 @@
 [Gladys Assistant](https://gladysassistant.com) external integration for
 **Saunum Leil sauna control panels**, over Modbus TCP on the local network:
 session, state, temperature, humidity, door, heater elements, alarm, setpoint,
-time left, light; turn off never held back; turning on and the setpoint behind
-an off-by-default option, refused while the door is open or an alarm is on.
+time left, light; turn off independent of the heating option and ahead of
+every queued request; turning on and the setpoint behind an off-by-default
+option, refused while the door is open or an alarm is on; a start checked on
+the reads and turned off if the panel does not keep its setpoint and duration.
 **Never tested with a real device. Not affiliated with Saunum.**
 
 User documentation: [docs/en.md](docs/en.md) · [docs/fr.md](docs/fr.md).
@@ -25,8 +27,9 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (SaunumApp)
   `pysaunum` Python library (MIT, mettolen/pysaunum, the library of Home
   Assistant's Saunum integration) reads and writes them.
 - **One connection at a time**: one socket per client, a new address waits
-  until the previous connection is closed; 500 ms between requests; closed
-  after 10 s idle (the panel closes at 20 s).
+  until the previous connection (even one still being opened) is closed; 1 s
+  between reads, 0.5 s before a command (pysaunum: 1000 ms recommended, 500 ms
+  minimum); closed after 10 s idle (pysaunum: the panel closes at 20 s).
 - **Identity**: one device per integration, `saunum:panel` (frozen). The
   registers carry no serial number.
 - **Reads**: every 30 s (10 s – 10 min), never sooner than the interval after
@@ -34,11 +37,14 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (SaunumApp)
   minute). A read where the session or door register is not 0/1 is refused
   as a whole ("invalid data").
 - **Commands**: turn off = one write of register 0 = 0, PROTECT priority
-  (before every queued read and command), never held back; turn on (setpoint
-  and duration of the configuration, then register 0 = 1) and setpoint behind
-  `allow_heating` (off), decided on a fresh read, checked again before each
-  write, all writes within 3.5 s of the click. See [docs/en.md](docs/en.md)
-  for the exact refusals.
+  (before every queued read and command, cuts a read on the wire), verified
+  by the reads and sent again (3 at most) if the sauna still heats; turn on
+  (setpoint and duration of the configuration, then register 0 = 1) and
+  setpoint behind `allow_heating` (off), decided on a fresh read carrying the
+  strict fingerprint of a Saunum panel, checked again before each write, all
+  writes within 3.5 s of the click; a start is checked on the reads (setpoint,
+  duration) and turned off otherwise. See [docs/en.md](docs/en.md) for the
+  exact refusals of each command.
 
 ## Development
 

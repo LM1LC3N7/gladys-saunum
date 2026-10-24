@@ -60,13 +60,17 @@ test/                             node --test, against the SDK's fake Gladys and
   bytes (`test/encoding.test.js`).
 - **Saunum.** Turning on and the setpoint stay behind `allow_heating` (off by
   default): a button and a thermostat setpoint, never a switch; decided on a
-  fresh read (door closed, no alarm, Standby, no start-block reason), checked
-  again right before each write, every write within 3.5 s of the click, never
-  above `max_temperature` (100 °C at most), duration `session_duration` (720
-  min at most). Turning off is never held back (option, heating in flight,
-  failed reads, before the first read), never preceded by a read, PROTECT
-  priority in the Modbus queue, and reaffirmed when a start may land after
-  it. ONE Modbus connection at a time; 500 ms between requests. The panel is
+  fresh read carrying the strict fingerprint of a panel (door closed, no
+  alarm, Standby, no start-block reason), checked again right before each
+  write, every write within 3.5 s of the click, never above `max_temperature`
+  (100 °C at most), duration `session_duration` (720 min at most); a start is
+  checked on the reads and turned off when the panel does not keep them.
+  Turning off does not depend on the option, a heating command, failed reads
+  or the first read; never preceded by a read, PROTECT priority in the Modbus
+  queue (cuts a read on the wire), verified by the reads and sent again.
+  The exact refusals of each command are in docs/en.md: keep them in step
+  with the code. ONE Modbus connection at a time; 1 s between reads, 0.5 s
+  before a command. The panel is
   never read sooner than the interval after the last read (kept in `/data`).
   A read for an old configuration publishes nothing (generation checked after
   every await).

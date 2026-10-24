@@ -18,12 +18,35 @@ up to date at the end of every milestone.
 - [x] **Milestone 1 — core** (2026-10-24): one panel per integration
       (address + Modbus unit id), reads every interval (never sooner, even
       after a restart), session, state, temperature, humidity, door, heater
-      elements, alarm, setpoint, time left, light; turn off never held back
-      (PROTECT priority, sticky guard kept in /data when a start may land
+      elements, alarm, setpoint, time left, light; turn off independent of the
+      option (PROTECT priority, sticky guard kept in /data when a start may land
       after it); turn on and setpoint behind `allow_heating` (off), decided on
       a fresh read (door closed, no alarm, nothing blocking a start), capped;
       one Modbus connection at a time; test button; docs en/fr; cover. Tested
       against a fake panel only.
+- [x] **Review 1 fixes** (2026-10-24), tests in `test/review1.test.js` and
+      `test/client.test.js`: B1 a start checked on the reads (setpoint not 0
+      and within the cap, duration written, register 106 and time left on a
+      newer firmware), turned off with a warning otherwise or when no read
+      checks it within 1 min. I2 strict fingerprint before turn on, setpoint
+      and light; a newer panel refusing 105-118 is not downgraded (heating
+      refused). I3 a connection being opened is destroyed and awaited by
+      `close()`; a new connection waits for every socket of the client to
+      close; an unused connection gets the idle timer. I4 "not sent yet" when
+      the turn off has not left at 4.3 s; a read on the wire is cut for a turn
+      off. I5 a guard after every turn off, lifted by a read showing the sauna
+      off, else sent again (3 at most) with a warning. I6 a read every 10 s
+      while a guard or a start check is pending (restored from /data too). I7
+      only the states of a read applied in the round are published. I8 the
+      setpoint follows register 109. I9 the configuration loaded again (5, 15,
+      30, then 60 s); a command arriving before waits for it within 3.5 s. I10
+      docs, manifest, README, CLAUDE.md: no false absolute, the refusals of
+      each command. M11 a start too slow for 3.5 s is refused before the first
+      write. M12 a turn off during an address change goes to the new address.
+      M13 one connection "may" (unverified), pysaunum spacing: 1 s between
+      reads, 0.5 s before a command. M14 a true reason for an invalid unit; a
+      turn off refused by a busy panel (exception 5/6) tried once more. M15
+      dead code removed.
 - [ ] **Milestone 2 — real panel**: run against a real Saunum Leil (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: fan speed and duration, sauna type (preset),
@@ -59,13 +82,24 @@ up to date at the end of every milestone.
   configuration before register 0 = 1 (a register holding 0 would let the
   preset choose, possibly above the cap). Refused unless state is Standby
   (newer firmware) and start-block reasons are 0.
-- **Turn off**: no read before it, always written, PROTECT priority (waits
-  only for the request on the wire and the 500 ms spacing). Confirmed by the
-  echo. A guard when it may have left without answer (lifted by a read
-  showing the sauna off) or when a start may land after it (sticky: lifted by
-  time only, 2 min, kept in /data, 3 reaffirmations at most). The /data write
-  of the sticky guard is not awaited before the turn off (a failing disk never
-  delays it).
+- **Turn off**: no read before it, always written, PROTECT priority (cuts a
+  read on the wire; waits only for a write on the wire and the 500 ms
+  spacing). Accepted on the echo, verified by the reads: a guard after every
+  turn off, lifted by a read showing the sauna off; sticky (time only, 2 min,
+  kept in /data) when a start may land after it; 3 reaffirmations at most,
+  with a warning. The /data write of the sticky guard is not awaited before
+  the turn off (a failing disk does not delay it).
+- **Start check** (review 1): the panel keeping the setpoint and duration
+  written before register 0 = 1 is unverified; every read while a session
+  started from Gladys may run checks them (kept in /data), and the sauna is
+  turned off otherwise, or when nothing could be read within 1 min. A change
+  of duration made at the panel during that session also turns it off.
+- **Spacing**: 1 s between reads (pysaunum recommendation), 0.5 s before a
+  command (pysaunum minimum): a turn on is up to 4 reads and 3 writes within
+  3.5 s.
+- **Fingerprint** (review 1): sauna type 0-31 (pysaunum: device-dependent),
+  fan duration 0-30 (pysaunum 0.7.0; 0-20 on its main branch), the other
+  ranges as pysaunum documents them.
 - **Light**: a plain write (not behind the option), refused before a
   successful read.
 - **Clocks**: deadlines, guards and intervals on a monotonic clock; /data on

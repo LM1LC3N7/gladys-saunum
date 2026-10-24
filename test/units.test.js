@@ -141,8 +141,9 @@ test('the states: never undefined nor NaN; setpoint 0 not published', () => {
 
 test('/data: repaired and bounded; a guard never longer than 2 min', () => {
   const now = 1_000_000;
-  assert.deepEqual(normalizeMemory(null, now), { lastAttemptAt: null, stopGuard: null });
-  assert.deepEqual(normalizeMemory('garbage', now), { lastAttemptAt: null, stopGuard: null });
+  const empty = { lastAttemptAt: null, stopGuard: null, launch: null };
+  assert.deepEqual(normalizeMemory(null, now), empty);
+  assert.deepEqual(normalizeMemory('garbage', now), empty);
   const m = normalizeMemory(
     {
       lastAttemptAt: now + 5000,

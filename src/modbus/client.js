@@ -76,7 +76,8 @@ const isWord = (value) => Number.isInteger(value) && value >= 0 && value <= 0xff
 
 /**
  * One job at a time, at least `spacing` ms after the end of the previous
- * one; by priority, then in order; never cuts the job running. A job still
+ * one (`spacing`: a number, or a function of the priority of the next job);
+ * by priority, then in order; never cuts the job running. A job still
  * queued at `startBy` leaves the queue, rejected LATE (never run). `close()`
  * rejects the queued jobs except the PROTECT ones, which still run.
  */
@@ -129,14 +130,19 @@ export class Gate {
       this.idle();
       return;
     }
-    const wait = this.lastEnd + this.spacing - this.now();
+    if (this.wake) {
+      // Recomputed: the head of the queue may have changed (a turn off arrived).
+      this.timers.clearTimeout(this.wake);
+      this.wake = undefined;
+    }
+    const spacing =
+      typeof this.spacing === 'function' ? this.spacing(this.queue[0].priority) : this.spacing;
+    const wait = this.lastEnd + spacing - this.now();
     if (wait > 0) {
-      if (!this.wake) {
-        this.wake = this.timers.setTimeout(() => {
-          this.wake = undefined;
-          this.pump();
-        }, wait);
-      }
+      this.wake = this.timers.setTimeout(() => {
+        this.wake = undefined;
+        this.pump();
+      }, wait);
       return;
     }
     const job = this.queue.shift();
@@ -189,7 +195,8 @@ export class ModbusClient {
     timers = globalThis,
     now = Date.now,
     after = Promise.resolve(),
-    spacing = TIMINGS.requestSpacing,
+    spacing = (priority) =>
+      priority === PRIORITY.READ ? TIMINGS.readSpacing : TIMINGS.requestSpacing,
   }) {
     this.host = host;
     this.port = port;
@@ -206,8 +213,12 @@ export class ModbusClient {
     this.transaction = 0;
     this.closed = false;
     this.idleTimer = undefined;
-    /** Resolved once the client is closed and its socket gone. */
+    /** Resolved once the client is closed and its sockets gone. */
     this.done = undefined;
+    /** Every socket created and not closed yet (connecting included): its 'close' promise. */
+    this.live = new Map();
+    /** Sockets whose connection is not established yet. */
+    this.dialing = new Set();
   }
 
   // --- Public, through the gate ------------------------------------------------
@@ -237,16 +248,43 @@ export class ModbusClient {
   }
 
   /**
+   * A turn off arrives: a READ on the wire is cut (the connection dropped)
+   * so the turn off never waits for its answer. A write on the wire is
+   * never cut. The read fails with CLOSED, `preempted`.
+   */
+  preemptRead() {
+    const pending = this.pending;
+    if (pending && pending.fn === FUNCTION.READ_HOLDING) {
+      const err = new ModbusError(ERROR_KINDS.CLOSED, { sent: true, detail: 'preempted' });
+      err.preempted = true;
+      this.fail(pending, err, true);
+    }
+  }
+
+  /** Resolves once every socket of this client has emitted 'close'. */
+  async gone() {
+    while (this.live.size > 0) {
+      await Promise.all([...this.live.values()]);
+    }
+  }
+
+  /**
    * Closes the client: the queued reads and commands are rejected, the
    * queued turn offs still go; then the connection is closed. Resolves once
    * the socket is gone (the next client may connect then).
    */
   close() {
     if (!this.done) {
-      this.done = this.gate.close().then(() => {
+      this.done = this.gate.close().then(async () => {
         this.closed = true;
         this.clearIdle();
         this.drop(new ModbusError(ERROR_KINDS.CLOSED, { sent: true }));
+        // A connection still being opened is destroyed too, and awaited:
+        // the next client never connects while one of ours exists.
+        for (const socket of this.dialing) {
+          socket.destroy();
+        }
+        await this.gone();
       });
     }
     return this.done;
@@ -393,8 +431,10 @@ export class ModbusClient {
       return;
     }
     if (!this.connecting) {
-      // One connection at a time: the previous client first lets its socket go.
+      // One connection at a time: the previous client first lets its sockets
+      // go, and so does a connection of ours that was dropped.
       this.connecting = Promise.resolve(this.after)
+        .then(() => this.gone())
         .then(() => this.dial())
         .finally(() => {
           this.connecting = undefined;
@@ -433,6 +473,17 @@ export class ModbusClient {
         reject(new ModbusError(ERROR_KINDS.UNREACHABLE));
         return;
       }
+      this.dialing.add(socket);
+      this.live.set(
+        socket,
+        new Promise((done) =>
+          socket.once('close', () => {
+            this.live.delete(socket);
+            this.dialing.delete(socket);
+            done();
+          }),
+        ),
+      );
       socket.on('error', () => {
         if (!settled) {
           settled = true;
@@ -447,6 +498,7 @@ export class ModbusClient {
         }
         settled = true;
         this.timers.clearTimeout(timer);
+        this.dialing.delete(socket);
         if (this.closed) {
           socket.destroy();
           reject(new ModbusError(ERROR_KINDS.UNREACHABLE));
@@ -460,6 +512,8 @@ export class ModbusClient {
             this.drop(new ModbusError(ERROR_KINDS.CLOSED, { sent: true }));
           }
         });
+        // A connection nobody uses (its request gave up meanwhile) is closed when idle.
+        this.armIdle();
         resolve();
       });
       socket.once('close', () => {
